@@ -1,0 +1,18 @@
+# Binaries
+bin/
+
+# Coverage artifacts
+coverage.out
+coverage.html
+
+# Local config override (never commit secrets)
+config.yaml
+config.local.yaml
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+*.swp
