@@ -1,8 +1,20 @@
-BIN        := vil-api
-MODULE     := github.com/villenneve/vil-core
-BUILD_DIR  := bin
-CMD        := ./cmd/api
-GO         := go
+BIN              := vil-api
+BIN_PAYMENTS     := vil-payments-api
+BIN_WORKER       := vil-subscription-worker
+MODULE           := github.com/villenneve/vil-core
+BUILD_DIR        := bin
+CMD              := ./cmd/api
+CMD_PAYMENTS     := ./cmd/payments-api
+CMD_WORKER       := ./cmd/subscription-worker
+GO               := go
+
+# Load .env file + .env.*.local (secrets, gitignored) into the shell environment.
+# Usage: $(call load-env,.env.development)
+define load-env
+	$(eval include $(1))
+	$(eval -include $(1).local)
+	$(eval export)
+endef
 
 .DEFAULT_GOAL := help
 
@@ -15,9 +27,43 @@ help: ## Show this help
 build: ## Build the API binary
 	$(GO) build -trimpath -o $(BUILD_DIR)/$(BIN) $(CMD)
 
+.PHONY: build-payments
+build-payments: ## Build the payments-api binary
+	$(GO) build -trimpath -o $(BUILD_DIR)/$(BIN_PAYMENTS) $(CMD_PAYMENTS)
+
+.PHONY: build-worker
+build-worker: ## Build the subscription-worker binary
+	$(GO) build -trimpath -o $(BUILD_DIR)/$(BIN_WORKER) $(CMD_WORKER)
+
+.PHONY: build-all
+build-all: build build-payments build-worker ## Build all binaries
+
+# ── Local run targets (auto-load .env.development + .env.development.local) ─────
+
 .PHONY: run
-run: ## Run the API locally
+run: ## Run the leads API with .env.development
+	$(call load-env,.env.development)
 	$(GO) run $(CMD)
+
+.PHONY: run-payments-dev
+run-payments-dev: ## Run payments-api with .env.development
+	$(call load-env,.env.development)
+	$(GO) run $(CMD_PAYMENTS)
+
+.PHONY: run-worker-dev
+run-worker-dev: ## Run subscription-worker with .env.development
+	$(call load-env,.env.development)
+	$(GO) run $(CMD_WORKER)
+
+# ── GCP deploy targets ───────────────────────────────────────────────────────
+
+.PHONY: deploy-dev
+deploy-dev: ## Deploy to Cloud Run edn-core-dev (uses .env.development + Secret Manager)
+	gcloud builds submit --config cloudbuild.development.yaml . --project=funcionario-online-493412
+
+.PHONY: deploy-prd
+deploy-prd: ## Deploy to Cloud Run edn-core-prd (uses .env.production + Secret Manager)
+	gcloud builds submit --config cloudbuild.yaml . --project=funcionario-online-493412
 
 .PHONY: test
 test: ## Run all tests (add -race on Linux/macOS CI where CGO is available)
@@ -48,3 +94,10 @@ clean: ## Remove build artifacts
 .PHONY: docker-build
 docker-build: ## Build the production Docker image
 	docker build -f deploy/docker/Dockerfile -t $(BIN):local .
+
+# kept as aliases for backwards compatibility
+.PHONY: cloudbuild-dev
+cloudbuild-dev: deploy-dev ## Alias for deploy-dev
+
+.PHONY: cloudbuild-prd
+cloudbuild-prd: deploy-prd ## Alias for deploy-prd

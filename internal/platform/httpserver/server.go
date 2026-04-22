@@ -14,7 +14,8 @@ import (
 )
 
 // New builds and returns the HTTP server with the application router mounted.
-func New(cfg config.HTTPConfig, log *zap.Logger) *http.Server {
+// Optional register functions may be provided to mount additional routes.
+func New(cfg config.HTTPConfig, log *zap.Logger, register ...func(chi.Router)) *http.Server {
 	r := chi.NewRouter()
 
 	// Core middleware
@@ -26,6 +27,11 @@ func New(cfg config.HTTPConfig, log *zap.Logger) *http.Server {
 	// Health endpoints — not gated by auth
 	r.Get("/livez", health.LiveHandler)
 	r.Get("/readyz", health.ReadyHandler)
+
+	// Feature routes registered by callers
+	for _, fn := range register {
+		fn(r)
+	}
 
 	// Versioned API prefix — extend per feature module
 	r.Route("/api/v1", func(r chi.Router) {

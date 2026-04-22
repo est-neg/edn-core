@@ -1,0 +1,335 @@
+openapi: 3.0.3
+info:
+  title: EDN Core API
+  version: 1.0.0
+  description: |
+    Backend core para produtos digitais EDN — leads, checkout, pagamentos e assinaturas.
+
+servers:
+  - url: http://localhost:8080
+    description: Desenvolvimento local
+  - url: https://dev.edn-core.app
+    description: Cloud Run (dev)
+  - url: https://edn-core.app
+    description: Cloud Run (produção)
+
+tags:
+  - name: Health
+    description: Probes de disponibilidade
+  - name: Leads
+    description: Captura e qualificação de leads
+  - name: Plans
+    description: Catálogo de planos disponíveis
+  - name: Checkout
+    description: Sessões de checkout e status de pedidos
+
+paths:
+
+  # ── Health ──────────────────────────────────────────────────────────────────
+
+  /livez:
+    get:
+      summary: Liveness probe
+      description: Retorna 200 enquanto o processo está rodando.
+      tags: [Health]
+      responses:
+        '200':
+          description: Alive
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: ok
+
+  /readyz:
+    get:
+      summary: Readiness probe
+      description: Retorna 200 quando as dependências (MongoDB, etc.) estão prontas.
+      tags: [Health]
+      responses:
+        '200':
+          description: Ready
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: ok
+        '503':
+          description: Not ready yet
+
+  # ── Leads ───────────────────────────────────────────────────────────────────
+
+  /api/leads:
+    post:
+      summary: Submeter um lead
+      description: |
+        Recebe um novo lead de qualquer canal (web, mobile, parceiro).
+        Requer o token de autenticação no header `Authorization`.
+      tags: [Leads]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateLeadRequest'
+            example:
+              name: "Maria Silva"
+              email: "maria@example.com"
+              phone: "+5511999990000"
+              source: "landing-page"
+      responses:
+        '201':
+          description: Lead criado com sucesso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeadResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Lead duplicado (dedup window ativa)
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  # ── Plans ───────────────────────────────────────────────────────────────────
+
+  /v1/plans:
+    get:
+      summary: Listar planos ativos
+      description: Retorna todos os planos disponíveis para checkout.
+      tags: [Plans]
+      responses:
+        '200':
+          description: Lista de planos
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Plan'
+              example:
+                - slug: "pro"
+                  name: "Plano Pro"
+                  billing_cycle: "monthly"
+                  price_cents: 9900
+                  currency: "BRL"
+                  active: true
+
+  # ── Checkout ────────────────────────────────────────────────────────────────
+
+  /v1/checkout/sessions:
+    post:
+      summary: Criar sessão de checkout
+      description: |
+        Cria um pedido e retorna a URL de checkout hospedada pela InfinitePay.
+        O preço é sempre resolvido pelo backend a partir do plano — nunca aceito do cliente.
+      tags: [Checkout]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCheckoutRequest'
+            example:
+              plan_slug: "pro"
+              billing_cycle: "monthly"
+              customer:
+                name: "João Costa"
+                email: "joao@example.com"
+                document: "12345678900"
+                phone: "+5511988880000"
+      responses:
+        '200':
+          description: Sessão criada — redirecionar para checkout_url
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateCheckoutResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          description: Plano não encontrado ou inativo
+        '422':
+          description: Plano inativo
+
+  /v1/orders/{orderNSU}/status:
+    get:
+      summary: Consultar status de pedido
+      description: |
+        Retorna o status atual do pedido e, se pago, os dados da assinatura ativada.
+      tags: [Checkout]
+      parameters:
+        - name: orderNSU
+          in: path
+          required: true
+          description: NSU único gerado no momento do checkout
+          schema:
+            type: string
+            pattern: '^[a-zA-Z0-9\-_]{1,64}$'
+            example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+      responses:
+        '200':
+          description: Status do pedido
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderStatusResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          description: Pedido não encontrado
+
+# ── Components ─────────────────────────────────────────────────────────────────
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Token de autenticação da leads API (VIL_LEADS_AUTH_TOKEN)
+
+  responses:
+    BadRequest:
+      description: Requisição inválida
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Token ausente ou inválido
+    TooManyRequests:
+      description: Rate limit excedido
+
+  schemas:
+
+    # ── Leads ────────────────────────────────────────────────────────────────
+
+    CreateLeadRequest:
+      type: object
+      required: [name, email]
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 120
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+          description: Número no formato E.164 ou brasileiro (10/11 dígitos)
+          example: "+5511999990000"
+        source:
+          type: string
+          maxLength: 80
+          example: "landing-page"
+
+    LeadResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    # ── Plans ────────────────────────────────────────────────────────────────
+
+    Plan:
+      type: object
+      properties:
+        slug:
+          type: string
+        name:
+          type: string
+        billing_cycle:
+          type: string
+          enum: [monthly, annual]
+        price_cents:
+          type: integer
+          description: Preço em centavos (BRL)
+        currency:
+          type: string
+          example: BRL
+        active:
+          type: boolean
+
+    # ── Checkout ─────────────────────────────────────────────────────────────
+
+    CreateCheckoutRequest:
+      type: object
+      required: [plan_slug, billing_cycle, customer]
+      properties:
+        plan_slug:
+          type: string
+        billing_cycle:
+          type: string
+          enum: [monthly, annual]
+        customer:
+          $ref: '#/components/schemas/Customer'
+
+    Customer:
+      type: object
+      required: [name, email]
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        document:
+          type: string
+          description: CPF ou CNPJ (só dígitos)
+        phone:
+          type: string
+
+    CreateCheckoutResponse:
+      type: object
+      properties:
+        order_nsu:
+          type: string
+          description: Identificador único do pedido para consulta de status
+        checkout_url:
+          type: string
+          format: uri
+          description: URL de checkout da InfinitePay para redirecionar o cliente
+
+    OrderStatusResponse:
+      type: object
+      properties:
+        order_nsu:
+          type: string
+        status:
+          type: string
+          enum: [pending, paid, failed, expired, cancelled]
+        subscription:
+          $ref: '#/components/schemas/SubscriptionSummary'
+
+    SubscriptionSummary:
+      type: object
+      nullable: true
+      properties:
+        status:
+          type: string
+          enum: [active, cancelled, expired]
+        plan_slug:
+          type: string
+        billing_cycle:
+          type: string
+          enum: [monthly, annual]
+        ends_at:
+          type: string
+          format: date-time
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
