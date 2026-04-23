@@ -50,7 +50,7 @@ images:
   - ${_IMAGE}
 
 substitutions:
-  _REGION: southamerica-east1
+  _REGION: us-central1
   _ARTIFACT_REPOSITORY: edn-core
   _IMAGE: ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_ARTIFACT_REPOSITORY}/edn-core-dev:${SHORT_SHA}
   _RUNTIME_SERVICE_ACCOUNT: edn-core-dev@$PROJECT_ID.iam.gserviceaccount.com
