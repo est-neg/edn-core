@@ -20,5 +20,5 @@ Thumbs.db
 .idea/
 *.swp
 
-# Local Windows build artifact
-api.exe
+# Local Windows build artifacts
+*.exe
