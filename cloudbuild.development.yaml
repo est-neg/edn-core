@@ -43,7 +43,7 @@ steps:
           --max-instances 1 \
           --timeout 300 \
           --service-account ${_RUNTIME_SERVICE_ACCOUNT} \
-          --env-vars-file .env.development \
+          --env-vars-file .env.development.yaml \
           --set-secrets VIL_MONGODB_URI=${_MONGODB_URI_SECRET}:latest,VIL_LEADS_AUTH_TOKEN=${_LEADS_AUTH_TOKEN_SECRET}:latest,VIL_REDIS_PASSWORD=${_REDIS_PASSWORD_SECRET}:latest,VIL_PAYMENTS_WEBHOOK_SECRET_PATH=${_PAYMENTS_WEBHOOK_SECRET}:latest,VIL_PAYMENTS_INTERNAL_VERIFY_AUTH_TOKEN=${_PAYMENTS_INTERNAL_VERIFY_AUTH_TOKEN_SECRET}:latest,VIL_PAYMENTS_INFINITEPAY_API_TOKEN=${_PAYMENTS_INFINITEPAY_API_TOKEN_SECRET}:latest,VIL_PAYMENTS_WEBHOOK_URL=${_PAYMENTS_WEBHOOK_URL_SECRET}:latest
 
 images:
