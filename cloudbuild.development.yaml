@@ -52,8 +52,8 @@ images:
 substitutions:
   _REGION: us-central1
   _ARTIFACT_REPOSITORY: edn-core
-  _IMAGE: ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_ARTIFACT_REPOSITORY}/edn-core-dev:${SHORT_SHA}
-  _RUNTIME_SERVICE_ACCOUNT: edn-core-dev@$PROJECT_ID.iam.gserviceaccount.com
+  _IMAGE: ${_REGION}-docker.pkg.dev/funcionario-online-493412/${_ARTIFACT_REPOSITORY}/edn-core-dev:${SHORT_SHA}
+  _RUNTIME_SERVICE_ACCOUNT: edn-core-dev@funcionario-online-493412.iam.gserviceaccount.com
   _MONGODB_URI_SECRET: edn-core-dev-mongodb-uri
   _LEADS_AUTH_TOKEN_SECRET: edn-core-dev-leads-auth-token
   _REDIS_PASSWORD_SECRET: edn-core-dev-redis-password
