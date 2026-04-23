@@ -29,21 +29,6 @@ import (
 	vilredis "github.com/villenneve/vil-core/internal/platform/redis"
 )
 
-// redocHTML is the ReDoc single-page documentation viewer.
-const redocHTML = `<!DOCTYPE html>
-<html>
-  <head>
-    <title>EDN Core — API Docs</title>
-    <meta charset="utf-8"/>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>body { margin: 0; padding: 0; }</style>
-  </head>
-  <body>
-    <redoc spec-url='/openapi.yaml'></redoc>
-    <script src="https://cdn.jsdelivr.net/npm/redoc/bundles/redoc.standalone.js"></script>
-  </body>
-</html>`
-
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
@@ -110,6 +95,12 @@ func main() {
 	// ── Pub/Sub (optional — disabled when project_id is empty) ─────────────
 	var publisher payments.PaymentEventPublisher
 	var pubsubClient *pubsub.Client
+	if cfg.PubSub.ProjectID != "" && cfg.PubSub.PaymentApprovedTopic == "" {
+		log.Fatal("pubsub.payment_approved_topic is required when pubsub.project_id is set")
+	}
+	if cfg.PubSub.ProjectID != "" && cfg.PubSub.PaymentApprovedSubscription == "" {
+		log.Fatal("pubsub.payment_approved_subscription is required when pubsub.project_id is set")
+	}
 	pubsubEnabled := cfg.PubSub.ProjectID != ""
 	if pubsubEnabled {
 		var err error
@@ -223,10 +214,15 @@ func main() {
 	r.Get("/livez", health.LiveHandler)
 	r.Get("/readyz", health.ReadyHandler)
 
-	// API Docs — ReDoc served at /docs, spec at /openapi.yaml
+	// API Docs — Scalar served at /docs, spec at /openapi.yaml
 	r.Get("/docs", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write([]byte(redocHTML)) //nolint:errcheck
+		w.Header().Set("Content-Security-Policy", docs.ScalarCSP)
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Write(docs.ScalarHTML) //nolint:errcheck
 	})
 	r.Get("/openapi.yaml", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/yaml")
