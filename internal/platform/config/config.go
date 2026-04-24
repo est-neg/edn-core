@@ -86,6 +86,9 @@ type HTTPConfig struct {
 	ReadTimeout  int    `mapstructure:"read_timeout_sec"`
 	WriteTimeout int    `mapstructure:"write_timeout_sec"`
 	IdleTimeout  int    `mapstructure:"idle_timeout_sec"`
+	// CORSAllowedOrigins is a comma-separated list of origins allowed via CORS.
+	// Example: "https://developer.funcionario.online,https://funcionario.online"
+	CORSAllowedOrigins string `mapstructure:"cors_allowed_origins"`
 }
 
 // LogConfig holds logger settings.
@@ -105,6 +108,7 @@ func Load() (*Config, error) {
 	v.SetDefault("http.read_timeout_sec", 10)
 	v.SetDefault("http.write_timeout_sec", 30)
 	v.SetDefault("http.idle_timeout_sec", 120)
+	v.SetDefault("http.cors_allowed_origins", "")
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.json", true)
 	// mongodb — uri and database have no fallback but must be registered so

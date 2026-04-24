@@ -3,6 +3,10 @@ http:
   read_timeout_sec: 10
   write_timeout_sec: 30
   idle_timeout_sec: 120
+  # cors_allowed_origins: origens permitidas via CORS (separadas por vírgula).
+  # Dev:  https://developer.funcionario.online
+  # Prd:  https://funcionario.online
+  cors_allowed_origins: ""
 
 log:
   level: "info"
@@ -36,8 +40,10 @@ redis:
 payments:
   # webhook_url loaded from VIL_PAYMENTS_WEBHOOK_URL env var — contains secret path, never commit here.
   webhook_url: ""
-  # redirect_url is the public URL InfinitePay redirects the customer to after checkout.
-  redirect_url: "https://yourapp.example.com/checkout/return"
+  # redirect_url é a URL pública para onde a InfinitePay redireciona o cliente após o checkout.
+  # Dev: https://developer.funcionario.online/checkout/return
+  # Prd: https://funcionario.online/checkout/return
+  redirect_url: "https://developer.funcionario.online/checkout/return"
   # webhook_secret_path loaded from VIL_PAYMENTS_WEBHOOK_SECRET_PATH — never commit here.
   webhook_secret_path: ""
   # internal_verify_auth_token loaded from VIL_PAYMENTS_INTERNAL_VERIFY_AUTH_TOKEN — never commit here.

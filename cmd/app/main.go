@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -209,6 +210,9 @@ func main() {
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
+	if cfg.HTTP.CORSAllowedOrigins != "" {
+		r.Use(corsMiddleware(cfg.HTTP.CORSAllowedOrigins))
+	}
 
 	// Health
 	r.Get("/livez", health.LiveHandler)
@@ -276,4 +280,37 @@ func main() {
 	}
 
 	log.Info("app stopped")
+}
+
+// corsMiddleware returns a middleware that sets CORS headers for listed allowed origins.
+// Origins are parsed from a comma-separated string (e.g. VIL_HTTP_CORS_ALLOWED_ORIGINS).
+// Preflight OPTIONS requests are absorbed and answered without hitting downstream handlers.
+// The webhook path is not affected because InfinitePay never sends an Origin header.
+func corsMiddleware(allowedRaw string) func(http.Handler) http.Handler {
+	allowed := make(map[string]struct{})
+	for _, o := range strings.Split(allowedRaw, ",") {
+		if trimmed := strings.TrimSpace(o); trimmed != "" {
+			allowed[trimmed] = struct{}{}
+		}
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			origin := r.Header.Get("Origin")
+			if origin != "" {
+				if _, ok := allowed[origin]; ok {
+					w.Header().Set("Access-Control-Allow-Origin", origin)
+					w.Header().Set("Vary", "Origin")
+					w.Header().Set("Access-Control-Allow-Credentials", "false")
+				}
+			}
+			if r.Method == http.MethodOptions {
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+				w.Header().Set("Access-Control-Max-Age", "86400")
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }

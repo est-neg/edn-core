@@ -55,6 +55,7 @@ func (s *CheckoutService) CreateSession(ctx context.Context, req CreateCheckoutR
 
 	phone, _ := NormalizePhone(req.Customer.Phone)
 	email := strings.ToLower(strings.TrimSpace(req.Customer.Email))
+	cpf, _ := NormalizeCPF(req.Customer.Document)
 
 	plan, err := s.plans.FindActiveBySlugAndCycle(ctx, req.PlanSlug, req.BillingCycle)
 	if err != nil {
@@ -65,19 +66,20 @@ func (s *CheckoutService) CreateSession(ctx context.Context, req CreateCheckoutR
 	now := time.Now().UTC()
 
 	order := checkout.Order{
-		OrderNSU:      orderNSU,
-		PlanID:        plan.PlanID,
-		PlanSlug:      plan.Slug,
-		BillingCycle:  plan.BillingCycle,
-		AmountCents:   plan.PriceCents, // ALWAYS from plan, never from request
-		Currency:      plan.Currency,
-		CustomerName:  strings.TrimSpace(req.Customer.Name),
-		CustomerEmail: email,
-		CustomerPhone: phone,
-		Status:        string(OrderStatusCreated),
-		Provider:      "infinitepay",
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		OrderNSU:         orderNSU,
+		PlanID:           plan.PlanID,
+		PlanSlug:         plan.Slug,
+		BillingCycle:     plan.BillingCycle,
+		AmountCents:      plan.PriceCents, // ALWAYS from plan, never from request
+		Currency:         plan.Currency,
+		CustomerName:     strings.TrimSpace(req.Customer.Name),
+		CustomerEmail:    email,
+		CustomerPhone:    phone,
+		CustomerDocument: cpf,
+		Status:           string(OrderStatusCreated),
+		Provider:         "infinitepay",
+		CreatedAt:        now,
+		UpdatedAt:        now,
 	}
 
 	if err := s.orders.Create(ctx, order); err != nil {
@@ -92,16 +94,17 @@ func (s *CheckoutService) CreateSession(ctx context.Context, req CreateCheckoutR
 	defer s.lock.ReleaseOrderLock(ctx, orderNSU, lockToken) //nolint:errcheck
 
 	providerReq := InfinitePayCheckoutRequest{
-		OrderNSU:        orderNSU,
-		PlanName:        plan.Name,
-		AmountCents:     plan.PriceCents,
-		Currency:        plan.Currency,
-		MaxInstallments: plan.MaxInstallments,
-		CustomerName:    order.CustomerName,
-		CustomerEmail:   email,
-		CustomerPhone:   phone,
-		WebhookURL:      s.cfg.WebhookURL,
-		RedirectURL:     s.cfg.RedirectURL,
+		OrderNSU:         orderNSU,
+		PlanName:         plan.Name,
+		AmountCents:      plan.PriceCents,
+		Currency:         plan.Currency,
+		MaxInstallments:  plan.MaxInstallments,
+		CustomerName:     order.CustomerName,
+		CustomerEmail:    email,
+		CustomerPhone:    phone,
+		CustomerDocument: cpf,
+		WebhookURL:       s.cfg.WebhookURL,
+		RedirectURL:      s.cfg.RedirectURL,
 	}
 
 	providerResp, err := s.provider.CreateCheckout(ctx, providerReq)

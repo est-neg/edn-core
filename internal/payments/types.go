@@ -47,9 +47,10 @@ type CreateCheckoutRequest struct {
 
 // CustomerPayload holds the customer fields nested in CreateCheckoutRequest.
 type CustomerPayload struct {
-	Name  string `json:"name"`
-	Email string `json:"email"`
-	Phone string `json:"phone"`
+	Name     string `json:"name"`
+	Email    string `json:"email"`
+	Phone    string `json:"phone"`
+	Document string `json:"document"` // CPF — 11 digits, com ou sem pontuação
 }
 
 // CreateCheckoutResponse is the HTTP response for POST /v1/checkout/sessions.
@@ -109,16 +110,17 @@ type PaymentApprovedEvent struct {
 
 // InfinitePayCheckoutRequest is the payload sent to InfinitePay's checkout API.
 type InfinitePayCheckoutRequest struct {
-	OrderNSU        string `json:"order_nsu"`
-	PlanName        string `json:"plan_name"`
-	AmountCents     int64  `json:"amount_cents"`
-	Currency        string `json:"currency"`
-	MaxInstallments int    `json:"max_installments"`
-	CustomerName    string `json:"customer_name"`
-	CustomerEmail   string `json:"customer_email"`
-	CustomerPhone   string `json:"customer_phone"`
-	WebhookURL      string `json:"webhook_url"`
-	RedirectURL     string `json:"redirect_url"`
+	OrderNSU         string `json:"order_nsu"`
+	PlanName         string `json:"plan_name"`
+	AmountCents      int64  `json:"amount_cents"`
+	Currency         string `json:"currency"`
+	MaxInstallments  int    `json:"max_installments"`
+	CustomerName     string `json:"customer_name"`
+	CustomerEmail    string `json:"customer_email"`
+	CustomerPhone    string `json:"customer_phone"`
+	CustomerDocument string `json:"customer_document"` // CPF normalizado (11 dígitos)
+	WebhookURL       string `json:"webhook_url"`
+	RedirectURL      string `json:"redirect_url"`
 }
 
 // InfinitePayCheckoutResponse is the parsed response from InfinitePay checkout creation.

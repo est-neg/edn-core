@@ -36,6 +36,7 @@ type Order struct {
 	CustomerName        string             `bson:"customer_name"`
 	CustomerEmail       string             `bson:"customer_email"`
 	CustomerPhone       string             `bson:"customer_phone"`
+	CustomerDocument    string             `bson:"customer_document,omitempty"` // CPF normalizado (11 dígitos)
 	Status              string             `bson:"status"`
 	Provider            string             `bson:"provider"`
 	ProviderCheckoutURL string             `bson:"provider_checkout_url,omitempty"`

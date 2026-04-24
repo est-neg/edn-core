@@ -57,14 +57,43 @@ func TestNormalizePhone(t *testing.T) {
 	}
 }
 
+func TestNormalizeCPF(t *testing.T) {
+	tests := []struct {
+		raw     string
+		want    string
+		wantErr bool
+	}{
+		{"529.982.247-25", "52998224725", false}, // com pontuação
+		{"52998224725", "52998224725", false},    // sem pontuação
+		{"111.444.777-35", "11144477735", false}, // outro CPF válido
+		{"", "", true},                           // vazio
+		{"00000000000", "", true},                // all same digit
+		{"11111111111", "", true},                // all same digit
+		{"12345678900", "", true},                // dígito verificador errado
+		{"529.982.247-26", "", true},             // dígito alterado
+		{"1234567", "", true},                    // curto demais
+	}
+	for _, tc := range tests {
+		got, err := NormalizeCPF(tc.raw)
+		if (err != nil) != tc.wantErr {
+			t.Errorf("NormalizeCPF(%q) error = %v, wantErr %v", tc.raw, err, tc.wantErr)
+			continue
+		}
+		if !tc.wantErr && got != tc.want {
+			t.Errorf("NormalizeCPF(%q) = %q, want %q", tc.raw, got, tc.want)
+		}
+	}
+}
+
 func TestValidateCreateCheckoutRequest(t *testing.T) {
 	valid := CreateCheckoutRequest{
 		PlanSlug:     "basic",
 		BillingCycle: "monthly",
 		Customer: CustomerPayload{
-			Name:  "João Silva",
-			Email: "joao@example.com",
-			Phone: "11987654321",
+			Name:     "João Silva",
+			Email:    "joao@example.com",
+			Phone:    "11987654321",
+			Document: "529.982.247-25", // CPF válido com pontuação
 		},
 	}
 	if err := ValidateCreateCheckoutRequest(valid); err != nil {
@@ -80,6 +109,9 @@ func TestValidateCreateCheckoutRequest(t *testing.T) {
 		{"missing customer name", func(r *CreateCheckoutRequest) { r.Customer.Name = "" }},
 		{"invalid email", func(r *CreateCheckoutRequest) { r.Customer.Email = "notanemail" }},
 		{"invalid phone", func(r *CreateCheckoutRequest) { r.Customer.Phone = "abc" }},
+		{"missing document", func(r *CreateCheckoutRequest) { r.Customer.Document = "" }},
+		{"invalid document all same digit", func(r *CreateCheckoutRequest) { r.Customer.Document = "00000000000" }},
+		{"invalid document wrong check digit", func(r *CreateCheckoutRequest) { r.Customer.Document = "52998224726" }},
 	}
 	for _, tc := range tests {
 		r := valid

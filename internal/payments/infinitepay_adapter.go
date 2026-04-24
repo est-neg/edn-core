@@ -42,9 +42,10 @@ type infinitePayCreateCheckoutPayload struct {
 }
 
 type infinitePayCustomer struct {
-	Name  string `json:"name"`
-	Email string `json:"email"`
-	Phone string `json:"phone"`
+	Name     string `json:"name"`
+	Email    string `json:"email"`
+	Phone    string `json:"phone"`
+	Document string `json:"document"` // CPF (11 dígitos, sem formatação)
 }
 
 type infinitePayItem struct {
@@ -72,9 +73,10 @@ func (a *infinitePayAdapter) CreateCheckout(ctx context.Context, req InfinitePay
 		WebhookURL:  req.WebhookURL,
 		RedirectURL: req.RedirectURL,
 		Customer: infinitePayCustomer{
-			Name:  req.CustomerName,
-			Email: req.CustomerEmail,
-			Phone: req.CustomerPhone,
+			Name:     req.CustomerName,
+			Email:    req.CustomerEmail,
+			Phone:    req.CustomerPhone,
+			Document: req.CustomerDocument,
 		},
 		Items: []infinitePayItem{
 			{

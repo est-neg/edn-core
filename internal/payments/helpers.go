@@ -23,6 +23,7 @@ func CalculateEventHash(body []byte) string {
 }
 
 var reE164 = regexp.MustCompile(`^\+[1-9]\d{6,14}$`)
+var reCPFDigits = regexp.MustCompile(`^\d{11}$`)
 
 // NormalizePhone normalizes a phone number to E.164 format.
 // It strips spaces and dashes, adds +55 for 10/11-digit Brazilian numbers.
@@ -57,6 +58,50 @@ var reEmail = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{
 var reOrderNSU = regexp.MustCompile(`^[a-zA-Z0-9\-_]{1,64}$`)
 var rePlanSlug = regexp.MustCompile(`^[a-z0-9\-_]{1,64}$`)
 
+// NormalizeCPF strips formatting from a CPF string and validates its check digits.
+// Accepts "000.000.000-00" or "00000000000" formats.
+func NormalizeCPF(raw string) (string, error) {
+	stripped := strings.Map(func(r rune) rune {
+		if unicode.IsDigit(r) {
+			return r
+		}
+		return -1
+	}, strings.TrimSpace(raw))
+
+	if !reCPFDigits.MatchString(stripped) {
+		return "", fmt.Errorf("%w: document (CPF) must have 11 digits", ErrInvalidRequest)
+	}
+	// Reject trivially invalid CPFs (all same digit)
+	if strings.Count(stripped, string(stripped[0])) == 11 {
+		return "", fmt.Errorf("%w: document (CPF) is invalid", ErrInvalidRequest)
+	}
+	// Validate first check digit
+	sum := 0
+	for i := 0; i < 9; i++ {
+		sum += int(stripped[i]-'0') * (10 - i)
+	}
+	rem := (sum * 10) % 11
+	if rem == 10 || rem == 11 {
+		rem = 0
+	}
+	if rem != int(stripped[9]-'0') {
+		return "", fmt.Errorf("%w: document (CPF) is invalid", ErrInvalidRequest)
+	}
+	// Validate second check digit
+	sum = 0
+	for i := 0; i < 10; i++ {
+		sum += int(stripped[i]-'0') * (11 - i)
+	}
+	rem = (sum * 10) % 11
+	if rem == 10 || rem == 11 {
+		rem = 0
+	}
+	if rem != int(stripped[10]-'0') {
+		return "", fmt.Errorf("%w: document (CPF) is invalid", ErrInvalidRequest)
+	}
+	return stripped, nil
+}
+
 // ValidateCreateCheckoutRequest validates the inbound checkout session request.
 // Price, currency, and amount are never validated from request — they come from the plan.
 func ValidateCreateCheckoutRequest(req CreateCheckoutRequest) error {
@@ -74,6 +119,9 @@ func ValidateCreateCheckoutRequest(req CreateCheckoutRequest) error {
 	}
 	if _, err := NormalizePhone(req.Customer.Phone); err != nil {
 		return fmt.Errorf("%w: invalid customer phone", ErrInvalidRequest)
+	}
+	if _, err := NormalizeCPF(req.Customer.Document); err != nil {
+		return err
 	}
 	return nil
 }
