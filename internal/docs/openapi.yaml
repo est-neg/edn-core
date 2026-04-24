@@ -277,18 +277,21 @@ components:
 
     Customer:
       type: object
-      required: [name, email]
+      required: [name, email, phone, document]
       properties:
         name:
           type: string
         email:
           type: string
           format: email
-        document:
-          type: string
-          description: CPF ou CNPJ (só dígitos)
         phone:
           type: string
+          description: Telefone em E.164 (+5511...) ou 10/11 dígitos brasileiros
+          example: "+5511987654321"
+        document:
+          type: string
+          description: CPF — 11 dígitos com ou sem pontuação (000.000.000-00 ou 00000000000)
+          example: "529.982.247-25"
 
     CreateCheckoutResponse:
       type: object
