@@ -1,11 +1,9 @@
-// Package main is the unified entrypoint for the EDN Core backend.
-// It starts the leads API, payments API, subscription worker, and outbox dispatcher
-// in a single process — one command to run everything locally (like npm run dev).
+// Package main is the public HTTP entrypoint for the EDN Core backend.
+// It serves leads and payments APIs without starting background workers.
 package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
@@ -14,7 +12,6 @@ import (
 	"syscall"
 	"time"
 
-	"cloud.google.com/go/pubsub"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"go.uber.org/zap"
@@ -22,12 +19,15 @@ import (
 	"github.com/villenneve/vil-core/internal/checkout"
 	"github.com/villenneve/vil-core/internal/docs"
 	"github.com/villenneve/vil-core/internal/leads"
+	"github.com/villenneve/vil-core/internal/organizations"
 	"github.com/villenneve/vil-core/internal/payments"
+	commercialplans "github.com/villenneve/vil-core/internal/plans"
 	"github.com/villenneve/vil-core/internal/platform/config"
 	"github.com/villenneve/vil-core/internal/platform/health"
 	"github.com/villenneve/vil-core/internal/platform/logger"
 	"github.com/villenneve/vil-core/internal/platform/mongodb"
 	vilredis "github.com/villenneve/vil-core/internal/platform/redis"
+	"github.com/villenneve/vil-core/internal/tenants"
 )
 
 func main() {
@@ -63,8 +63,6 @@ func main() {
 	if cfg.Redis.Addr == "" {
 		log.Fatal("redis.addr is required")
 	}
-	// Pub/Sub is optional — omit VIL_PUBSUB_PROJECT_ID to disable locally.
-	// When disabled, a noop publisher is used and the subscription worker does not start.
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -82,6 +80,9 @@ func main() {
 	if err := mongodb.BootstrapCheckoutStorage(ctx, mongoClient, cfg.MongoDB); err != nil {
 		log.Fatal("checkout mongodb bootstrap error", zap.Error(err))
 	}
+	if err := mongodb.BootstrapTenancyStorage(ctx, mongoClient, cfg.MongoDB); err != nil {
+		log.Fatal("tenancy mongodb bootstrap error", zap.Error(err))
+	}
 
 	health.SetReadinessCheck(func(ctx context.Context) error {
 		return mongoClient.Ping(ctx, nil)
@@ -92,32 +93,6 @@ func main() {
 		log.Fatal("redis connect error", zap.Error(err))
 	}
 	defer redisClient.Close()
-
-	// ── Pub/Sub (optional — disabled when project_id is empty) ─────────────
-	var publisher payments.PaymentEventPublisher
-	var pubsubClient *pubsub.Client
-	if cfg.PubSub.ProjectID != "" && cfg.PubSub.PaymentApprovedTopic == "" {
-		log.Fatal("pubsub.payment_approved_topic is required when pubsub.project_id is set")
-	}
-	if cfg.PubSub.ProjectID != "" && cfg.PubSub.PaymentApprovedSubscription == "" {
-		log.Fatal("pubsub.payment_approved_subscription is required when pubsub.project_id is set")
-	}
-	pubsubEnabled := cfg.PubSub.ProjectID != ""
-	if pubsubEnabled {
-		var err error
-		pubsubClient, err = pubsub.NewClient(ctx, cfg.PubSub.ProjectID)
-		if err != nil {
-			log.Fatal("pubsub client error", zap.Error(err))
-		}
-		defer pubsubClient.Close()
-		publisher, err = payments.NewPubSubPublisher(pubsubClient, cfg.PubSub.PaymentApprovedTopic, log)
-		if err != nil {
-			log.Fatal("pubsub publisher error", zap.Error(err))
-		}
-	} else {
-		log.Warn("pubsub disabled (VIL_PUBSUB_PROJECT_ID not set) — using noop publisher")
-		publisher = payments.NewNoopPublisher(log)
-	}
 
 	// ── Leads module ────────────────────────────────────────────────────────
 	leadsRepo := leads.NewMongoRepository(mongoClient, cfg.MongoDB)
@@ -134,7 +109,11 @@ func main() {
 	storeAdapter := payments.NewCheckoutStoreAdapter(checkoutStore)
 
 	planRepo := payments.NewMongoPlanRepository(mongoClient, cfg.MongoDB)
+	versionedPlanRepo := commercialplans.NewMongoRepository(mongoClient, cfg.MongoDB)
+	organizationRepo := organizations.NewMongoRepository(mongoClient, cfg.MongoDB)
+	tenantRepo := tenants.NewMongoRepository(mongoClient, cfg.MongoDB)
 	orderRepo := payments.NewMongoOrderRepository(mongoClient, cfg.MongoDB)
+	checkoutIdempotencyRepo := payments.NewMongoCheckoutIdempotencyRepository(mongoClient, cfg.MongoDB)
 	paymentRepo := payments.NewMongoPaymentRepository(mongoClient, cfg.MongoDB)
 	subRepo := payments.NewMongoSubscriptionRepository(mongoClient, cfg.MongoDB)
 	webhookRepo := payments.NewMongoWebhookEventRepository(mongoClient, cfg.MongoDB)
@@ -147,63 +126,15 @@ func main() {
 		log,
 	)
 
-	checkoutSvc := payments.NewCheckoutService(planRepo, orderRepo, ipClient, storeAdapter, storeAdapter, cfg.Payments, log)
+	checkoutSvc := payments.NewCheckoutService(planRepo, versionedPlanRepo, organizationRepo, tenantRepo, orderRepo, checkoutIdempotencyRepo, ipClient, storeAdapter, storeAdapter, cfg.Payments, log)
 	statusSvc := payments.NewOrderStatusService(orderRepo, subRepo, storeAdapter, log)
-	planSvc := payments.NewPlanQueryService(planRepo, log)
+	planSvc := payments.NewPlanQueryService(planRepo, versionedPlanRepo, organizationRepo, tenantRepo, log)
 	webhookSvc := payments.NewWebhookService(
 		orderRepo, paymentRepo, subRepo, webhookRepo, outboxRepo,
 		storeAdapter, storeAdapter, storeAdapter,
 		ipClient, log,
 	)
 	paymentsHandler := payments.NewHandler(checkoutSvc, statusSvc, planSvc, webhookSvc, log)
-
-	// ── Subscription worker (background — only when Pub/Sub is enabled) ────
-	if pubsubEnabled {
-		activationSvc := payments.NewActivationService(orderRepo, subRepo, planRepo, storeAdapter, log)
-		sub := pubsubClient.Subscription(cfg.PubSub.PaymentApprovedSubscription)
-		go func() {
-			log.Info("subscription worker started",
-				zap.String("subscription", cfg.PubSub.PaymentApprovedSubscription),
-			)
-			if err := sub.Receive(ctx, func(ctx context.Context, msg *pubsub.Message) {
-				var event payments.PaymentApprovedEvent
-				if err := json.Unmarshal(msg.Data, &event); err != nil {
-					log.Error("invalid event payload", zap.Error(err), zap.String("message_id", msg.ID))
-					msg.Nack()
-					return
-				}
-				if err := activationSvc.Activate(ctx, event); err != nil {
-					log.Error("activation failed", zap.Error(err), zap.String("order_nsu", event.OrderNSU))
-					msg.Nack()
-					return
-				}
-				msg.Ack()
-			}); err != nil && !errors.Is(err, context.Canceled) {
-				log.Error("subscription worker error", zap.Error(err))
-			}
-		}()
-	}
-
-	// ── Outbox dispatcher (background) ─────────────────────────────────────
-	go func() {
-		dispatcher := payments.NewOutboxDispatcher(outboxRepo, publisher, log)
-		interval := time.Duration(cfg.Payments.OutboxDispatchIntervalSec) * time.Second
-		if interval == 0 {
-			interval = 30 * time.Second
-		}
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if err := dispatcher.Dispatch(ctx, 50); err != nil {
-					log.Error("outbox dispatch error", zap.Error(err))
-				}
-			}
-		}
-	}()
 
 	// ── Router ──────────────────────────────────────────────────────────────
 	r := chi.NewRouter()

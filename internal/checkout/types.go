@@ -28,8 +28,12 @@ type Order struct {
 	ID                  primitive.ObjectID `bson:"_id,omitempty"`
 	OrderID             string             `bson:"id"`
 	OrderNSU            string             `bson:"order_nsu"`
+	OrganizationID      string             `bson:"organization_id,omitempty"`
+	TenantID            string             `bson:"tenant_id,omitempty"`
 	PlanID              string             `bson:"plan_id"`
 	PlanSlug            string             `bson:"plan_slug"`
+	PlanVersion         int                `bson:"plan_version,omitempty"`
+	PlanSource          string             `bson:"plan_source,omitempty"`
 	BillingCycle        string             `bson:"billing_cycle"`
 	AmountCents         int64              `bson:"amount_cents"`
 	Currency            string             `bson:"currency"`

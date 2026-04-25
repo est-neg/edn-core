@@ -44,16 +44,24 @@ type PubSubConfig struct {
 
 // MongoConfig holds MongoDB connection settings.
 type MongoConfig struct {
-	URI                     string `mapstructure:"uri"`
-	Database                string `mapstructure:"database"`
-	ConnectTimeoutSec       int    `mapstructure:"connect_timeout_sec"`
-	CollectionLeads         string `mapstructure:"collection_leads"`
-	CollectionPlans         string `mapstructure:"collection_plans"`
-	CollectionOrders        string `mapstructure:"collection_orders"`
-	CollectionPayments      string `mapstructure:"collection_payments"`
-	CollectionSubscriptions string `mapstructure:"collection_subscriptions"`
-	CollectionWebhookEvents string `mapstructure:"collection_webhook_events"`
-	CollectionOutboxEvents  string `mapstructure:"collection_outbox_events"`
+	URI                       string `mapstructure:"uri"`
+	Database                  string `mapstructure:"database"`
+	ConnectTimeoutSec         int    `mapstructure:"connect_timeout_sec"`
+	CollectionLeads           string `mapstructure:"collection_leads"`
+	CollectionPlans           string `mapstructure:"collection_plans"`
+	CollectionOrders          string `mapstructure:"collection_orders"`
+	CollectionPayments        string `mapstructure:"collection_payments"`
+	CollectionSubscriptions   string `mapstructure:"collection_subscriptions"`
+	CollectionWebhookEvents   string `mapstructure:"collection_webhook_events"`
+	CollectionOutboxEvents    string `mapstructure:"collection_outbox_events"`
+	CollectionOrganizations   string `mapstructure:"collection_organizations"`
+	CollectionTenants         string `mapstructure:"collection_tenants"`
+	CollectionCatalogItems    string `mapstructure:"collection_catalog_items"`
+	CollectionPackages        string `mapstructure:"collection_packages"`
+	CollectionIdempotencyKeys string `mapstructure:"collection_idempotency_keys"`
+	// CollectionVersionedPlans holds new versioned commercial plans (internal/plans).
+	// Kept separate from CollectionPlans to preserve the legacy checkout flow.
+	CollectionVersionedPlans string `mapstructure:"collection_versioned_plans"`
 }
 
 // RedisConfig holds Redis connection settings.
@@ -124,6 +132,12 @@ func Load() (*Config, error) {
 	v.SetDefault("mongodb.collection_subscriptions", "subscriptions")
 	v.SetDefault("mongodb.collection_webhook_events", "webhook_events")
 	v.SetDefault("mongodb.collection_outbox_events", "outbox_events")
+	v.SetDefault("mongodb.collection_organizations", "organizations")
+	v.SetDefault("mongodb.collection_tenants", "tenants")
+	v.SetDefault("mongodb.collection_catalog_items", "catalog_items")
+	v.SetDefault("mongodb.collection_packages", "packages")
+	v.SetDefault("mongodb.collection_idempotency_keys", "idempotency_keys")
+	v.SetDefault("mongodb.collection_versioned_plans", "versioned_plans")
 	// redis
 	v.SetDefault("redis.addr", "localhost:6379")
 	v.SetDefault("redis.password", "")

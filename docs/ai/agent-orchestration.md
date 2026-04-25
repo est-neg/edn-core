@@ -15,7 +15,7 @@ This setup follows the current VS Code and GitHub Copilot customization model:
 | --- | --- | --- | --- |
 | `safe-backend-orchestrator` | Flow coordination | Route work, sequence handoffs, manage specialist usage | `GPT-5.4 xhigh` |
 | `social-media-growth-manager` | Growth and channel operations | Own Facebook, Instagram, WhatsApp, Meta Business workflows, organic growth, and social analytics | `GPT-5.4 xhigh` |
-| `solution-architect` | System/Solution Architect | Boundaries, contracts, NFRs, sequencing, risks | `GPT-5.4 xhigh` |
+| `solution-architect` | System/Solution Architect | Boundaries, contracts, NFRs, sequencing, risks, and methodology-guided architecture reviews using TOGAF, Zachman, Well-Architected, DDD, and C4 | `GPT-5.4 xhigh` |
 | `golang-developer` | Agile Team backend engineer | Implement Go services, workers, adapters, refactors | `Claude Sonnet 4.6` |
 | `database-engineer` | Data specialist / platform engineer | MariaDB, MongoDB, Redis design, migrations, caching | `Claude Sonnet 4.6` |
 | `security-reviewer` | Built-in security / compliance | Approve, reject, and suggest remediation for risks | `GPT-5.4 xhigh` |
@@ -33,7 +33,7 @@ This setup follows the current VS Code and GitHub Copilot customization model:
 
 1. `safe-backend-orchestrator` classifies the request and chooses the smallest specialist set.
 2. `social-media-growth-manager` leads Facebook, Instagram, WhatsApp, Meta Business, content-system, organic-growth, and social-analytics requests.
-3. `solution-architect` defines boundaries, contracts, sequencing, and non-functional constraints when social or backend work needs product changes, APIs, or new event flows.
+3. `solution-architect` defines boundaries, contracts, sequencing, and non-functional constraints when social or backend work needs product changes, APIs, or new event flows, applying TOGAF for transition planning, Zachman for completeness, Well-Architected for cloud tradeoffs, DDD for domain boundaries, and C4 for communication when relevant.
 4. `golang-developer` and `database-engineer` implement the approved Meta integration, analytics capture, and data design.
 5. `security-reviewer` evaluates permissions, auth, secrets, data exposure, privacy, and operational hardening.
 6. `qa-tdd` validates the change with tests, regression analysis, tracking checks, and release guidance.
@@ -48,6 +48,7 @@ This setup follows the current VS Code and GitHub Copilot customization model:
 ## Operating Principles
 
 - Architecture before broad coding.
+- Use recognized architecture lenses deliberately: TOGAF for governance and transition planning, Zachman for completeness, Well-Architected for cloud operations, DDD for domain modeling, and C4 for communication.
 - TDD and built-in quality over post-hoc inspection.
 - Security gates for externally reachable or privilege-changing behavior.
 - Explicit data ownership across MariaDB, MongoDB, and Redis.

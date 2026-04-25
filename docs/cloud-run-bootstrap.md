@@ -8,8 +8,8 @@ O projeto já tinha bootstrap básico de aplicação e conexão com MongoDB, mas
 
 ### Cloud Run services
 
-- desenvolvimento: `edn-core-dev`
-- produção: `edn-core-prd`
+- desenvolvimento: `edn-core-dev` e `edn-core-dev-worker`
+- produção: `edn-core-prd` e `edn-core-prd-worker`
 
 ### MongoDB databases
 
@@ -24,16 +24,17 @@ MongoDB Atlas não cria o banco no painel só porque a URI existe. O banco e a c
 
 ### Runtime bootstrap
 
-No startup a aplicação agora faz, nesta ordem:
+No startup o serviço HTTP público agora faz, nesta ordem:
 
 1. carrega `VIL_*`
 2. falha rápido se `VIL_MONGODB_URI`, `VIL_MONGODB_DATABASE` ou `VIL_LEADS_AUTH_TOKEN` estiverem ausentes
 3. conecta ao Atlas e executa `Ping`
-4. cria explicitamente a coleção `leads` se ela ainda não existir
-5. cria os índices necessários de forma idempotente
-6. publica readiness apenas se o `Ping` do Mongo continuar saudável
+4. cria explicitamente as coleções e índices de leads, checkout e tenancy de forma idempotente
+5. publica readiness apenas se o `Ping` do Mongo continuar saudável
 
-Isso é suficiente para materializar `edn-core-db-dev.leads` e `edn-core-db-prd.leads` assim que cada serviço subir pela primeira vez.
+O worker interno segue o mesmo princípio para os artefatos de checkout/pagamentos, mas expõe apenas `livez` e `readyz` para o próprio Cloud Run, sem tráfego público.
+
+Isso é suficiente para materializar `edn-core-db-dev` e `edn-core-db-prd` com as coleções de leads, checkout, tenancy e outbox assim que os serviços subirem pela primeira vez.
 
 ### Why the Docker image changed
 
@@ -66,6 +67,14 @@ O arquivo [cloudbuild.development.yaml](../cloudbuild.development.yaml) publica 
 - `--set-secrets` para URI Mongo e token do webhook de leads
 - escalonamento mais conservador para desenvolvimento
 
+O mesmo pipeline publica um segundo binário para `edn-core-dev-worker` com:
+
+- target Docker `./cmd/subscription-worker`
+- `--no-allow-unauthenticated`
+- `--ingress internal`
+- segredos mínimos para MongoDB e Redis
+- processamento do subscriber `payment.approved` e do outbox fora do boundary público
+
 ### Production
 
 O arquivo [cloudbuild.yaml](../cloudbuild.yaml) faz deploy do serviço `edn-core-prd` com:
@@ -74,6 +83,8 @@ O arquivo [cloudbuild.yaml](../cloudbuild.yaml) faz deploy do serviço `edn-core
 - `--set-secrets` para URI Mongo e token do webhook de leads
 - `min-instances=1` para reduzir cold start
 - limites de concorrência mais altos
+
+O mesmo pipeline também publica `edn-core-prd-worker` com a mesma imagem-base parametrizada por `GO_BUILD_TARGET`, mantendo o boundary público separado do processamento de background.
 
 ## Secret Handling
 
@@ -164,9 +175,10 @@ Contribuição solicitada:
 ## Operational Checks After First Deploy
 
 1. confirmar que `edn-core-dev` sobe e `GET /readyz` retorna `200`
-2. confirmar no Atlas que `edn-core-db-dev` apareceu com a coleção `leads`
-3. repetir o fluxo para `edn-core-prd`
-4. confirmar no Atlas a presença dos índices:
+2. confirmar que `edn-core-dev-worker` sobe e `GET /readyz` retorna `200`
+3. confirmar no Atlas que `edn-core-db-dev` apareceu com as coleções `leads`, `orders`, `payments`, `subscriptions`, `webhook_events`, `outbox_events`, `organizations`, `tenants`, `idempotency_keys` e `versioned_plans`
+4. repetir o fluxo para `edn-core-prd` e `edn-core-prd-worker`
+5. confirmar no Atlas a presença dos índices:
    - `idx_id_unique`
    - `idx_dedup_key_unique`
    - `idx_dedup`

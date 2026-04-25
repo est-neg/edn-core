@@ -15,7 +15,7 @@ $CMD_WRK   = "./cmd/subscription-worker"
 
 # Carrega um arquivo .env e seu override .local (gitignored) no processo corrente.
 # Linhas comecando com # sao ignoradas. O arquivo .local e opcional.
-function Load-Env([string]$envFile) {
+function Import-Env([string]$envFile) {
     foreach ($file in @($envFile, "$envFile.local")) {
         if (Test-Path $file) {
             Get-Content $file | ForEach-Object {
@@ -32,7 +32,7 @@ function Load-Env([string]$envFile) {
 switch ($Task) {
 
     "dev" {
-        Load-Env ".env.development"
+        Import-Env ".env.development"
         Write-Host ""
         Write-Host "EDN Core [development]" -ForegroundColor Green
         Write-Host "  API  -> http://localhost:8080" -ForegroundColor DarkGray
@@ -42,19 +42,19 @@ switch ($Task) {
     }
 
     "run-dev" {
-        Load-Env ".env.development"
+        Import-Env ".env.development"
         Write-Host "payments-api [development]" -ForegroundColor Green
         go run $CMD_PAY
     }
 
     "run-worker-dev" {
-        Load-Env ".env.development"
+        Import-Env ".env.development"
         Write-Host "subscription-worker [development]" -ForegroundColor Green
         go run $CMD_WRK
     }
 
     "run" {
-        Load-Env ".env.development"
+        Import-Env ".env.development"
         Write-Host "leads API [development]" -ForegroundColor Green
         go run $CMD
     }
@@ -122,17 +122,23 @@ switch ($Task) {
         docker build -f deploy/docker/Dockerfile -t "${BIN}:local" .
     }
 
+    "seed-dev" {
+        Import-Env ".env.development"
+        Write-Host "Seeding development database..." -ForegroundColor Cyan
+        go run ./cmd/dev-seed
+    }
+
     "help" {
         Write-Host ""
         Write-Host "Targets disponiveis:" -ForegroundColor Cyan
         Write-Host ""
         Write-Host "  PRINCIPAL:" -ForegroundColor Yellow
-        Write-Host "    dev              Sobe tudo (leads + payments + worker) com docs em /docs"
+        Write-Host "    dev              Sobe o app HTTP publico (cmd/app) com docs em /docs"
         Write-Host ""
         Write-Host "  MODULOS INDIVIDUAIS:" -ForegroundColor Yellow
-        Write-Host "    run              leads API"
-        Write-Host "    run-dev          payments-api"
-        Write-Host "    run-worker-dev   subscription-worker"
+        Write-Host "    run              leads API dedicada (cmd/api)"
+        Write-Host "    run-dev          payments-api dedicado (cmd/payments-api)"
+        Write-Host "    run-worker-dev   subscription-worker separado"
         Write-Host ""
         Write-Host "  GCP DEPLOY:" -ForegroundColor Yellow
         Write-Host "    deploy-dev       Cloud Build -> Cloud Run edn-core-dev"
@@ -144,6 +150,9 @@ switch ($Task) {
         Write-Host "    build            Compila leads API"
         Write-Host "    build-payments   Compila payments-api"
         Write-Host "    build-worker     Compila subscription-worker"
+        Write-Host ""
+        Write-Host "  DEV DATA:" -ForegroundColor Yellow
+        Write-Host "    seed-dev         Popula o MongoDB de desenvolvimento com org/tenant/catalog/plans"
         Write-Host ""
         Write-Host "  QUALIDADE:" -ForegroundColor Yellow
         Write-Host "    test             Roda todos os testes"

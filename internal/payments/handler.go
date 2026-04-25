@@ -3,6 +3,7 @@ package payments
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 
@@ -31,8 +32,20 @@ func NewHandler(
 
 // ListPlans handles GET /v1/plans.
 func (h *Handler) ListPlans(w http.ResponseWriter, r *http.Request) {
-	plans, err := h.plans.ListActivePlans(r.Context())
+	plans, err := h.plans.ListActivePlans(r.Context(), PlanListQuery{
+		OrganizationSlug: r.URL.Query().Get("organization_slug"),
+		TenantSlug:       r.URL.Query().Get("tenant_slug"),
+		Channel:          r.URL.Query().Get("channel"),
+	})
 	if err != nil {
+		if errors.Is(err, ErrInvalidRequest) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+			return
+		}
+		if errors.Is(err, ErrOrganizationNotFound) || errors.Is(err, ErrTenantNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "organization or tenant not found"})
+			return
+		}
 		h.log.Error("list plans failed", zap.Error(err))
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
@@ -48,14 +61,23 @@ func (h *Handler) CreateCheckoutSession(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
+	req.IdempotencyKey = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
 	resp, err := h.checkout.CreateSession(r.Context(), req)
 	if err != nil {
 		if errors.Is(err, ErrInvalidRequest) {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
 			return
 		}
+		if errors.Is(err, ErrCheckoutConflict) || errors.Is(err, ErrCheckoutInProgress) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
 		if errors.Is(err, ErrPlanNotFound) || errors.Is(err, ErrPlanInactive) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "plan not found or inactive"})
+			return
+		}
+		if errors.Is(err, ErrOrganizationNotFound) || errors.Is(err, ErrTenantNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "organization or tenant not found"})
 			return
 		}
 		h.log.Error("create checkout session failed", zap.Error(err))
@@ -106,17 +128,18 @@ func (h *Handler) HandleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
-	var rawBody []byte
-	buf := make([]byte, 64*1024)
-	n, _ := r.Body.Read(buf)
-	rawBody = buf[:n]
+	rawBody, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
 
 	if len(rawBody) == 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "empty body"})
 		return
 	}
 
-	err := h.webhook.Handle(r.Context(), rawBody)
+	err = h.webhook.Handle(r.Context(), rawBody)
 	if err != nil {
 		if errors.Is(err, ErrInvalidRequest) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid webhook payload"})
@@ -124,8 +147,7 @@ func (h *Handler) HandleWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 		// Log without request path to avoid leaking secret
 		h.log.Error("webhook processing failed", zap.Error(err))
-		// Return 200 to avoid InfinitePay retrying on transient errors
-		writeJSON(w, http.StatusOK, map[string]string{"status": "processing_error"})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "processing error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

@@ -100,24 +100,54 @@ paths:
   /v1/plans:
     get:
       summary: Listar planos ativos
-      description: Retorna todos os planos disponíveis para checkout.
+      description: |
+        Retorna os planos disponíveis para checkout.
+        Quando `organization_slug` e `tenant_slug` são informados, o backend resolve o tenant em runtime
+        e consulta a coleção `versioned_plans`. Sem esse escopo, o caminho legado continua disponível.
       tags: [Plans]
+      parameters:
+        - name: organization_slug
+          in: query
+          required: false
+          description: Slug público da organização. Deve ser enviado junto com `tenant_slug`.
+          schema:
+            type: string
+        - name: tenant_slug
+          in: query
+          required: false
+          description: Slug público do tenant. Deve ser enviado junto com `organization_slug`.
+          schema:
+            type: string
+        - name: channel
+          in: query
+          required: false
+          description: Canal comercial filtrado. O padrão operacional do checkout público é `web`.
+          schema:
+            type: string
+            enum: [web, mobile, partner, all]
       responses:
         '200':
           description: Lista de planos
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Plan'
+                type: object
+                properties:
+                  plans:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Plan'
               example:
-                - slug: "pro"
-                  name: "Plano Pro"
-                  billing_cycle: "monthly"
-                  price_cents: 9900
-                  currency: "BRL"
-                  active: true
+                plans:
+                  - slug: "pro"
+                    name: "Plano Pro"
+                    billing_cycle: "monthly"
+                    price_cents: 9900
+                    currency: "BRL"
+        '404':
+          description: Organização ou tenant não encontrados
+        '422':
+          description: Escopo inválido
 
   # ── Checkout ────────────────────────────────────────────────────────────────
 
@@ -127,7 +157,19 @@ paths:
       description: |
         Cria um pedido e retorna a URL de checkout hospedada pela InfinitePay.
         O preço é sempre resolvido pelo backend a partir do plano — nunca aceito do cliente.
+        O cliente deve enviar o header `Idempotency-Key` para garantir retry seguro.
+        Para catálogo multi-tenant, envie `organization_slug` e `tenant_slug`; o backend resolve o tenant
+        em runtime e seleciona o plano publicado em `versioned_plans`.
       tags: [Checkout]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: Chave opaca do cliente para colapsar retries do mesmo checkout.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
       requestBody:
         required: true
         content:
@@ -135,6 +177,9 @@ paths:
             schema:
               $ref: '#/components/schemas/CreateCheckoutRequest'
             example:
+              organization_slug: "acme"
+              tenant_slug: "public"
+              channel: "web"
               plan_slug: "pro"
               billing_cycle: "monthly"
               customer:
@@ -143,7 +188,7 @@ paths:
                 document: "12345678900"
                 phone: "+5511988880000"
       responses:
-        '200':
+        '201':
           description: Sessão criada — redirecionar para checkout_url
           content:
             application/json:
@@ -151,10 +196,12 @@ paths:
                 $ref: '#/components/schemas/CreateCheckoutResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '409':
+          description: Chave de idempotencia em conflito ou checkout ainda em andamento
         '404':
-          description: Plano não encontrado ou inativo
+          description: Organização, tenant ou plano não encontrados
         '422':
-          description: Plano inativo
+          description: Requisição inválida
 
   /v1/orders/{orderNSU}/status:
     get:
@@ -267,6 +314,16 @@ components:
       type: object
       required: [plan_slug, billing_cycle, customer]
       properties:
+        organization_slug:
+          type: string
+          description: Slug público da organização. Deve ser enviado junto com `tenant_slug` para o catálogo multi-tenant.
+        tenant_slug:
+          type: string
+          description: Slug público do tenant. Deve ser enviado junto com `organization_slug` para o catálogo multi-tenant.
+        channel:
+          type: string
+          enum: [web, mobile, partner, all]
+          description: Canal comercial do checkout. Quando omitido, o backend assume `web`.
         plan_slug:
           type: string
         billing_cycle:
@@ -299,10 +356,16 @@ components:
         order_nsu:
           type: string
           description: Identificador único do pedido para consulta de status
+        status:
+          type: string
+          enum: [created, checkout_created, pending, paid, failed, expired, pending_review]
         checkout_url:
           type: string
           format: uri
           description: URL de checkout da InfinitePay para redirecionar o cliente
+        expires_at:
+          type: string
+          format: date-time
 
     OrderStatusResponse:
       type: object
@@ -311,9 +374,15 @@ components:
           type: string
         status:
           type: string
-          enum: [pending, paid, failed, expired, cancelled]
-        subscription:
-          $ref: '#/components/schemas/SubscriptionSummary'
+          enum: [created, checkout_created, pending, paid, failed, expired, pending_review]
+        subscription_status:
+          type: string
+          enum: [pending_activation, active, suspended, canceled, expired]
+        receipt_url:
+          type: string
+          format: uri
+        plan_slug:
+          type: string
 
     SubscriptionSummary:
       type: object

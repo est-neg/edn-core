@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"github.com/google/uuid"
+	commercialplans "github.com/villenneve/vil-core/internal/plans"
 )
 
 // GenerateOrderNSU generates a unique, backend-only order identifier.
@@ -20,6 +21,23 @@ func GenerateOrderNSU() string {
 func CalculateEventHash(body []byte) string {
 	sum := sha256.Sum256(body)
 	return fmt.Sprintf("%x", sum)
+}
+
+// CalculateCheckoutRequestHash computes a stable hash for the commercial parts of a
+// checkout request after server-side normalization.
+func CalculateCheckoutRequestHash(organizationSlug, tenantSlug, channel, planSlug, billingCycle, customerName, email, phone, cpf string) string {
+	payload := strings.Join([]string{
+		strings.TrimSpace(strings.ToLower(organizationSlug)),
+		strings.TrimSpace(strings.ToLower(tenantSlug)),
+		strings.TrimSpace(strings.ToLower(channel)),
+		strings.TrimSpace(planSlug),
+		strings.TrimSpace(billingCycle),
+		strings.TrimSpace(customerName),
+		strings.TrimSpace(strings.ToLower(email)),
+		strings.TrimSpace(phone),
+		strings.TrimSpace(cpf),
+	}, "|")
+	return CalculateEventHash([]byte(payload))
 }
 
 var reE164 = regexp.MustCompile(`^\+[1-9]\d{6,14}$`)
@@ -108,6 +126,12 @@ func ValidateCreateCheckoutRequest(req CreateCheckoutRequest) error {
 	if !rePlanSlug.MatchString(req.PlanSlug) {
 		return fmt.Errorf("%w: invalid plan_slug", ErrInvalidRequest)
 	}
+	if err := ValidateTenantScope(req.OrganizationSlug, req.TenantSlug); err != nil {
+		return err
+	}
+	if _, err := NormalizeSalesChannel(req.Channel); err != nil {
+		return err
+	}
 	if req.BillingCycle != "monthly" && req.BillingCycle != "annual" {
 		return fmt.Errorf("%w: billing_cycle must be monthly or annual", ErrInvalidRequest)
 	}
@@ -124,6 +148,41 @@ func ValidateCreateCheckoutRequest(req CreateCheckoutRequest) error {
 		return err
 	}
 	return nil
+}
+
+// ValidateTenantScope enforces that public commercial scope is either fully absent
+// (legacy mode) or fully specified with organization and tenant slugs.
+func ValidateTenantScope(organizationSlug, tenantSlug string) error {
+	org := strings.TrimSpace(strings.ToLower(organizationSlug))
+	tenant := strings.TrimSpace(strings.ToLower(tenantSlug))
+	if org == "" && tenant == "" {
+		return nil
+	}
+	if org == "" || tenant == "" {
+		return fmt.Errorf("%w: organization_slug and tenant_slug must be provided together", ErrInvalidRequest)
+	}
+	if !rePlanSlug.MatchString(org) {
+		return fmt.Errorf("%w: invalid organization_slug", ErrInvalidRequest)
+	}
+	if !rePlanSlug.MatchString(tenant) {
+		return fmt.Errorf("%w: invalid tenant_slug", ErrInvalidRequest)
+	}
+	return nil
+}
+
+// NormalizeSalesChannel validates and normalizes public commerce channel values.
+// Empty input defaults to web because public checkout traffic originates from the web channel.
+func NormalizeSalesChannel(raw string) (string, error) {
+	channel := strings.ToLower(strings.TrimSpace(raw))
+	if channel == "" {
+		return commercialplans.ChannelWeb, nil
+	}
+	switch channel {
+	case commercialplans.ChannelWeb, commercialplans.ChannelMobile, commercialplans.ChannelPartner, commercialplans.ChannelAll:
+		return channel, nil
+	default:
+		return "", fmt.Errorf("%w: invalid channel", ErrInvalidRequest)
+	}
 }
 
 // ValidateOrderNSU checks that an order NSU from a URL param is safe to use in DB queries.

@@ -94,6 +94,14 @@ func ensureOrdersIndexes(ctx context.Context, coll *mongo.Collection) error {
 			Keys:    bson.D{{Key: "created_at", Value: -1}},
 			Options: options.Index().SetName("idx_orders_created_at"),
 		},
+		{
+			Keys: bson.D{
+				{Key: "tenant_id", Value: 1},
+				{Key: "status", Value: 1},
+				{Key: "created_at", Value: -1},
+			},
+			Options: options.Index().SetName("idx_orders_tenant_status_created_at"),
+		},
 	}
 	if _, err := coll.Indexes().CreateMany(ctx, indexes); err != nil {
 		return fmt.Errorf("ensure orders indexes: %w", err)

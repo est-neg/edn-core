@@ -65,6 +65,11 @@ deploy-dev: ## Deploy to Cloud Run edn-core-dev (uses .env.development + Secret 
 deploy-prd: ## Deploy to Cloud Run edn-core-prd (uses .env.production + Secret Manager)
 	gcloud builds submit --config cloudbuild.yaml . --project=funcionario-online-493412
 
+.PHONY: seed-dev
+seed-dev: ## Seed development MongoDB with base commercial hierarchy (org/tenant/catalog/plans)
+	$(call load-env,.env.development)
+	$(GO) run ./cmd/dev-seed
+
 .PHONY: test
 test: ## Run all tests (add -race on Linux/macOS CI where CGO is available)
 	$(GO) test ./... -count=1

@@ -87,8 +87,11 @@ func TestNormalizeCPF(t *testing.T) {
 
 func TestValidateCreateCheckoutRequest(t *testing.T) {
 	valid := CreateCheckoutRequest{
-		PlanSlug:     "basic",
-		BillingCycle: "monthly",
+		OrganizationSlug: "acme",
+		TenantSlug:       "public",
+		Channel:          "web",
+		PlanSlug:         "basic",
+		BillingCycle:     "monthly",
 		Customer: CustomerPayload{
 			Name:     "João Silva",
 			Email:    "joao@example.com",
@@ -112,12 +115,37 @@ func TestValidateCreateCheckoutRequest(t *testing.T) {
 		{"missing document", func(r *CreateCheckoutRequest) { r.Customer.Document = "" }},
 		{"invalid document all same digit", func(r *CreateCheckoutRequest) { r.Customer.Document = "00000000000" }},
 		{"invalid document wrong check digit", func(r *CreateCheckoutRequest) { r.Customer.Document = "52998224726" }},
+		{"missing tenant slug", func(r *CreateCheckoutRequest) { r.TenantSlug = "" }},
+		{"invalid channel", func(r *CreateCheckoutRequest) { r.Channel = "ivr" }},
 	}
 	for _, tc := range tests {
 		r := valid
 		tc.mutate(&r)
 		if err := ValidateCreateCheckoutRequest(r); err == nil {
 			t.Errorf("case %q: expected validation error but got nil", tc.name)
+		}
+	}
+}
+
+func TestNormalizeSalesChannel(t *testing.T) {
+	tests := []struct {
+		raw     string
+		want    string
+		wantErr bool
+	}{
+		{"", "web", false},
+		{"WEB", "web", false},
+		{"mobile", "mobile", false},
+		{"partner", "partner", false},
+		{"ivr", "", true},
+	}
+	for _, tc := range tests {
+		got, err := NormalizeSalesChannel(tc.raw)
+		if (err != nil) != tc.wantErr {
+			t.Fatalf("NormalizeSalesChannel(%q) error = %v, wantErr %v", tc.raw, err, tc.wantErr)
+		}
+		if !tc.wantErr && got != tc.want {
+			t.Fatalf("NormalizeSalesChannel(%q) = %q, want %q", tc.raw, got, tc.want)
 		}
 	}
 }

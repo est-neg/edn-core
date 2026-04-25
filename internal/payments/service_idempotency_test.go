@@ -1,0 +1,381 @@
+package payments
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"go.uber.org/zap"
+
+	"github.com/villenneve/vil-core/internal/checkout"
+	"github.com/villenneve/vil-core/internal/idempotency"
+	"github.com/villenneve/vil-core/internal/organizations"
+	commercialplans "github.com/villenneve/vil-core/internal/plans"
+	"github.com/villenneve/vil-core/internal/platform/config"
+	"github.com/villenneve/vil-core/internal/tenants"
+)
+
+type fakePlanRepo struct {
+	plan *checkout.Plan
+}
+
+func (r *fakePlanRepo) FindActiveBySlugAndCycle(_ context.Context, slug, billingCycle string) (*checkout.Plan, error) {
+	if r.plan == nil || r.plan.Slug != slug || r.plan.BillingCycle != billingCycle {
+		return nil, ErrPlanNotFound
+	}
+	return r.plan, nil
+}
+
+func (r *fakePlanRepo) ListActive(_ context.Context) ([]checkout.Plan, error) {
+	if r.plan == nil {
+		return nil, nil
+	}
+	return []checkout.Plan{*r.plan}, nil
+}
+
+type fakeVersionedPlanRepo struct {
+	plan *commercialplans.Plan
+}
+
+func (r *fakeVersionedPlanRepo) FindSellableByTenantSlug(_ context.Context, tenantID, slug, billingCycle, channel string, _ time.Time) (*commercialplans.Plan, error) {
+	if r.plan == nil || r.plan.TenantID != tenantID || r.plan.Slug != slug || r.plan.BillingCycle != billingCycle {
+		return nil, ErrPlanNotFound
+	}
+	if channel != "" && channel != commercialplans.ChannelAll && r.plan.Channel != channel && r.plan.Channel != commercialplans.ChannelAll {
+		return nil, ErrPlanNotFound
+	}
+	return r.plan, nil
+}
+
+func (r *fakeVersionedPlanRepo) ListActiveByTenant(_ context.Context, tenantID, channel string) ([]commercialplans.Plan, error) {
+	if r.plan == nil || r.plan.TenantID != tenantID {
+		return nil, nil
+	}
+	if channel != "" && channel != commercialplans.ChannelAll && r.plan.Channel != channel && r.plan.Channel != commercialplans.ChannelAll {
+		return nil, nil
+	}
+	return []commercialplans.Plan{*r.plan}, nil
+}
+
+type fakeOrganizationRepo struct {
+	org *organizations.Organization
+}
+
+func (r *fakeOrganizationRepo) FindBySlug(_ context.Context, slug string) (*organizations.Organization, error) {
+	if r.org == nil || r.org.Slug != slug {
+		return nil, ErrOrganizationNotFound
+	}
+	return r.org, nil
+}
+
+type fakeTenantRepo struct {
+	tenant *tenants.Tenant
+}
+
+func (r *fakeTenantRepo) FindByOrgAndSlug(_ context.Context, organizationID, slug string) (*tenants.Tenant, error) {
+	if r.tenant == nil || r.tenant.OrganizationID != organizationID || r.tenant.Slug != slug {
+		return nil, ErrTenantNotFound
+	}
+	return r.tenant, nil
+}
+
+type fakeOrderRepo struct {
+	orders               map[string]*checkout.Order
+	updateProviderURLErr error
+	updateStatusErr      error
+}
+
+func newFakeOrderRepo() *fakeOrderRepo {
+	return &fakeOrderRepo{orders: make(map[string]*checkout.Order)}
+}
+
+func (r *fakeOrderRepo) Create(_ context.Context, order checkout.Order) error {
+	copy := order
+	r.orders[order.OrderNSU] = &copy
+	return nil
+}
+
+func (r *fakeOrderRepo) GetByNSU(_ context.Context, orderNSU string) (*checkout.Order, error) {
+	order, ok := r.orders[orderNSU]
+	if !ok {
+		return nil, ErrOrderNotFound
+	}
+	copy := *order
+	return &copy, nil
+}
+
+func (r *fakeOrderRepo) UpdateStatus(_ context.Context, orderNSU string, status OrderStatus, updatedAt time.Time) error {
+	if r.updateStatusErr != nil {
+		return r.updateStatusErr
+	}
+	order, ok := r.orders[orderNSU]
+	if !ok {
+		return ErrOrderNotFound
+	}
+	order.Status = string(status)
+	order.UpdatedAt = updatedAt
+	return nil
+}
+
+func (r *fakeOrderRepo) UpdateProviderURL(_ context.Context, orderNSU, checkoutURL, invoiceSlug string, updatedAt time.Time) error {
+	if r.updateProviderURLErr != nil {
+		return r.updateProviderURLErr
+	}
+	order, ok := r.orders[orderNSU]
+	if !ok {
+		return ErrOrderNotFound
+	}
+	order.ProviderCheckoutURL = checkoutURL
+	order.InvoiceSlug = invoiceSlug
+	order.UpdatedAt = updatedAt
+	return nil
+}
+
+func (r *fakeOrderRepo) UpdateReceipt(_ context.Context, orderNSU, receiptURL string, updatedAt time.Time) error {
+	order, ok := r.orders[orderNSU]
+	if !ok {
+		return ErrOrderNotFound
+	}
+	order.ReceiptURL = receiptURL
+	order.UpdatedAt = updatedAt
+	return nil
+}
+
+type fakeProvider struct {
+	calls int
+	resp  InfinitePayCheckoutResponse
+	err   error
+}
+
+func (p *fakeProvider) CreateCheckout(_ context.Context, _ InfinitePayCheckoutRequest) (InfinitePayCheckoutResponse, error) {
+	p.calls++
+	if p.err != nil {
+		return InfinitePayCheckoutResponse{}, p.err
+	}
+	return p.resp, nil
+}
+
+func (p *fakeProvider) VerifyPayment(_ context.Context, _, _, _ string) (InfinitePayVerifyResponse, error) {
+	return InfinitePayVerifyResponse{}, nil
+}
+
+type fakeLockManager struct{}
+
+func (fakeLockManager) AcquireOrderLock(context.Context, string, string) error { return nil }
+func (fakeLockManager) ReleaseOrderLock(context.Context, string, string) error { return nil }
+
+type fakeStatusCache struct{}
+
+func (fakeStatusCache) GetOrderStatus(context.Context, string) (string, bool, error) {
+	return "", false, nil
+}
+func (fakeStatusCache) SetOrderStatus(context.Context, string, string) error { return nil }
+func (fakeStatusCache) InvalidateOrderStatus(context.Context, string) error  { return nil }
+
+type fakeCheckoutIdempotencyRepo struct {
+	records map[string]*idempotency.Key
+}
+
+func newFakeCheckoutIdempotencyRepo() *fakeCheckoutIdempotencyRepo {
+	return &fakeCheckoutIdempotencyRepo{records: make(map[string]*idempotency.Key)}
+}
+
+func idemLookup(tenantID, operation, key string) string {
+	return tenantID + ":" + operation + ":" + key
+}
+
+func (r *fakeCheckoutIdempotencyRepo) Reserve(_ context.Context, key idempotency.Key) error {
+	lookup := idemLookup(key.TenantID, key.Operation, key.IdempotencyKey)
+	if _, exists := r.records[lookup]; exists {
+		return idempotency.ErrDuplicate
+	}
+	copy := key
+	r.records[lookup] = &copy
+	return nil
+}
+
+func (r *fakeCheckoutIdempotencyRepo) FindByTenantOpKey(_ context.Context, tenantID, operation, idempotencyKey string) (*idempotency.Key, error) {
+	record, ok := r.records[idemLookup(tenantID, operation, idempotencyKey)]
+	if !ok {
+		return nil, idempotency.ErrNotFound
+	}
+	copy := *record
+	return &copy, nil
+}
+
+func (r *fakeCheckoutIdempotencyRepo) Commit(_ context.Context, tenantID, operation, idempotencyKey, resourceID, resourceStatus, resourceURL, externalRef string, updatedAt time.Time) error {
+	record, ok := r.records[idemLookup(tenantID, operation, idempotencyKey)]
+	if !ok {
+		return idempotency.ErrNotFound
+	}
+	record.ResourceID = resourceID
+	record.ResourceStatus = resourceStatus
+	record.ResourceURL = resourceURL
+	record.ExternalRef = externalRef
+	record.Status = idempotency.StatusCommitted
+	record.UpdatedAt = updatedAt
+	return nil
+}
+
+func (r *fakeCheckoutIdempotencyRepo) Fail(_ context.Context, tenantID, operation, idempotencyKey string, updatedAt time.Time) error {
+	record, ok := r.records[idemLookup(tenantID, operation, idempotencyKey)]
+	if !ok {
+		return idempotency.ErrNotFound
+	}
+	record.Status = idempotency.StatusFailed
+	record.UpdatedAt = updatedAt
+	return nil
+}
+
+func newCheckoutServiceForIdempotencyTests() (*CheckoutService, *fakeProvider) {
+	provider := &fakeProvider{resp: InfinitePayCheckoutResponse{CheckoutURL: "https://checkout.example/session", InvoiceSlug: "inv-123"}}
+	service := NewCheckoutService(
+		&fakePlanRepo{plan: &checkout.Plan{
+			PlanID:          "plan-basic",
+			Slug:            "basic",
+			Name:            "Plano Basic",
+			BillingCycle:    "monthly",
+			PriceCents:      9900,
+			Currency:        "BRL",
+			Active:          true,
+			MaxInstallments: 1,
+		}},
+		&fakeVersionedPlanRepo{},
+		&fakeOrganizationRepo{},
+		&fakeTenantRepo{},
+		newFakeOrderRepo(),
+		newFakeCheckoutIdempotencyRepo(),
+		provider,
+		fakeLockManager{},
+		fakeStatusCache{},
+		config.PaymentsConfig{},
+		zap.NewNop(),
+	)
+	return service, provider
+}
+
+func validCheckoutRequest() CreateCheckoutRequest {
+	return CreateCheckoutRequest{
+		Channel:        "web",
+		PlanSlug:       "basic",
+		BillingCycle:   "monthly",
+		IdempotencyKey: "checkout-key-001",
+		Customer: CustomerPayload{
+			Name:     "Joao Silva",
+			Email:    "joao@example.com",
+			Phone:    "11987654321",
+			Document: "529.982.247-25",
+		},
+	}
+}
+
+func TestCheckoutService_CreateSession_ReusesSameKeyAndPayload(t *testing.T) {
+	service, provider := newCheckoutServiceForIdempotencyTests()
+	request := validCheckoutRequest()
+
+	first, err := service.CreateSession(context.Background(), request)
+	if err != nil {
+		t.Fatalf("first CreateSession returned error: %v", err)
+	}
+
+	second, err := service.CreateSession(context.Background(), request)
+	if err != nil {
+		t.Fatalf("second CreateSession returned error: %v", err)
+	}
+
+	if first.OrderNSU != second.OrderNSU {
+		t.Fatalf("expected same order NSU, got %q and %q", first.OrderNSU, second.OrderNSU)
+	}
+	if first.CheckoutURL != second.CheckoutURL {
+		t.Fatalf("expected same checkout URL, got %q and %q", first.CheckoutURL, second.CheckoutURL)
+	}
+	if provider.calls != 1 {
+		t.Fatalf("expected provider to be called once, got %d", provider.calls)
+	}
+	if second.Status != OrderStatusCheckoutCreated {
+		t.Fatalf("expected checkout_created on replay, got %q", second.Status)
+	}
+}
+
+func TestCheckoutService_CreateSession_RejectsSameKeyDifferentPayload(t *testing.T) {
+	service, provider := newCheckoutServiceForIdempotencyTests()
+	first := validCheckoutRequest()
+	if _, err := service.CreateSession(context.Background(), first); err != nil {
+		t.Fatalf("first CreateSession returned error: %v", err)
+	}
+
+	second := validCheckoutRequest()
+	second.Customer.Name = "Maria Souza"
+
+	_, err := service.CreateSession(context.Background(), second)
+	if !errors.Is(err, ErrCheckoutConflict) {
+		t.Fatalf("expected ErrCheckoutConflict, got %v", err)
+	}
+	if provider.calls != 1 {
+		t.Fatalf("expected provider to be called once, got %d", provider.calls)
+	}
+}
+
+func TestCheckoutService_CreateSession_MissingIdempotencyKeyIsRejected(t *testing.T) {
+	service, provider := newCheckoutServiceForIdempotencyTests()
+	request := validCheckoutRequest()
+	request.IdempotencyKey = ""
+
+	_, err := service.CreateSession(context.Background(), request)
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("expected ErrInvalidRequest, got %v", err)
+	}
+	if provider.calls != 0 {
+		t.Fatalf("expected provider to not be called, got %d", provider.calls)
+	}
+}
+
+func TestCheckoutService_CreateSession_ReplaysCommittedSnapshotWhenOrderPersistenceFails(t *testing.T) {
+	provider := &fakeProvider{resp: InfinitePayCheckoutResponse{CheckoutURL: "https://checkout.example/recover", InvoiceSlug: "inv-recover"}}
+	orders := newFakeOrderRepo()
+	orders.updateProviderURLErr = errors.New("write concern timeout")
+	orders.updateStatusErr = errors.New("write concern timeout")
+	idempotencyRepo := newFakeCheckoutIdempotencyRepo()
+	service := NewCheckoutService(
+		&fakePlanRepo{plan: &checkout.Plan{
+			PlanID:          "plan-basic",
+			Slug:            "basic",
+			Name:            "Plano Basic",
+			BillingCycle:    "monthly",
+			PriceCents:      9900,
+			Currency:        "BRL",
+			Active:          true,
+			MaxInstallments: 1,
+		}},
+		&fakeVersionedPlanRepo{},
+		&fakeOrganizationRepo{},
+		&fakeTenantRepo{},
+		orders,
+		idempotencyRepo,
+		provider,
+		fakeLockManager{},
+		fakeStatusCache{},
+		config.PaymentsConfig{},
+		zap.NewNop(),
+	)
+
+	req := validCheckoutRequest()
+	first, err := service.CreateSession(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CreateSession returned error: %v", err)
+	}
+	if first.CheckoutURL != "https://checkout.example/recover" {
+		t.Fatalf("expected checkout URL to come from provider snapshot, got %q", first.CheckoutURL)
+	}
+	second, err := service.CreateSession(context.Background(), req)
+	if err != nil {
+		t.Fatalf("replay CreateSession returned error: %v", err)
+	}
+	if second.CheckoutURL != first.CheckoutURL {
+		t.Fatalf("expected replayed checkout URL %q, got %q", first.CheckoutURL, second.CheckoutURL)
+	}
+	if provider.calls != 1 {
+		t.Fatalf("expected provider to be called once, got %d", provider.calls)
+	}
+}

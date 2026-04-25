@@ -7,6 +7,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 
 	"github.com/villenneve/vil-core/internal/checkout"
+	"github.com/villenneve/vil-core/internal/idempotency"
 	"github.com/villenneve/vil-core/internal/platform/config"
 )
 
@@ -72,6 +73,29 @@ func (r *orderRepo) UpdateReceipt(ctx context.Context, orderNSU, receiptURL stri
 	return r.inner.UpdateReceipt(ctx, orderNSU, receiptURL, updatedAt)
 }
 
+// checkoutIdempotencyRepo adapts idempotency.Repository to payments.CheckoutIdempotencyRepository.
+type checkoutIdempotencyRepo struct{ inner idempotency.Repository }
+
+func NewMongoCheckoutIdempotencyRepository(client *mongo.Client, cfg config.MongoConfig) CheckoutIdempotencyRepository {
+	return &checkoutIdempotencyRepo{inner: idempotency.NewMongoRepository(client, cfg)}
+}
+
+func (r *checkoutIdempotencyRepo) Reserve(ctx context.Context, key idempotency.Key) error {
+	return r.inner.Reserve(ctx, key)
+}
+
+func (r *checkoutIdempotencyRepo) FindByTenantOpKey(ctx context.Context, tenantID, operation, idempotencyKey string) (*idempotency.Key, error) {
+	return r.inner.FindByTenantOpKey(ctx, tenantID, operation, idempotencyKey)
+}
+
+func (r *checkoutIdempotencyRepo) Commit(ctx context.Context, tenantID, operation, idempotencyKey, resourceID, resourceStatus, resourceURL, externalRef string, updatedAt time.Time) error {
+	return r.inner.Commit(ctx, tenantID, operation, idempotencyKey, resourceID, resourceStatus, resourceURL, externalRef, updatedAt)
+}
+
+func (r *checkoutIdempotencyRepo) Fail(ctx context.Context, tenantID, operation, idempotencyKey string, updatedAt time.Time) error {
+	return r.inner.Fail(ctx, tenantID, operation, idempotencyKey, updatedAt)
+}
+
 // paymentRepo adapts checkout.PaymentRepository to payments.PaymentRepository.
 type paymentRepo struct{ inner checkout.PaymentRepository }
 
@@ -123,6 +147,10 @@ func (r *webhookRepo) Insert(ctx context.Context, event checkout.WebhookEvent) e
 
 func (r *webhookRepo) ExistsByEventHash(ctx context.Context, eventHash string) (bool, error) {
 	return r.inner.ExistsByEventHash(ctx, eventHash)
+}
+
+func (r *webhookRepo) FindByTransactionNSU(ctx context.Context, transactionNSU string) ([]checkout.WebhookEvent, error) {
+	return r.inner.FindByTransactionNSU(ctx, transactionNSU)
 }
 
 func (r *webhookRepo) MarkProcessed(ctx context.Context, id string, processedAt time.Time) error {

@@ -15,14 +15,32 @@ steps:
       - build
       - -f
       - deploy/docker/Dockerfile
+      - --build-arg
+      - GO_BUILD_TARGET=./cmd/app
       - -t
-      - ${_IMAGE}
+      - ${_APP_IMAGE}
       - .
 
   - name: gcr.io/cloud-builders/docker
     args:
       - push
-      - ${_IMAGE}
+      - ${_APP_IMAGE}
+
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - deploy/docker/Dockerfile
+      - --build-arg
+      - GO_BUILD_TARGET=./cmd/subscription-worker
+      - -t
+      - ${_WORKER_IMAGE}
+      - .
+
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_WORKER_IMAGE}
 
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     entrypoint: bash
@@ -30,7 +48,7 @@ steps:
       - -ceu
       - |
         gcloud run deploy edn-core-prd \
-          --image ${_IMAGE} \
+          --image ${_APP_IMAGE} \
           --region ${_REGION} \
           --platform managed \
           --allow-unauthenticated \
@@ -46,14 +64,40 @@ steps:
           --env-vars-file .env.production \
           --set-secrets VIL_MONGODB_URI=${_MONGODB_URI_SECRET}:latest,VIL_LEADS_AUTH_TOKEN=${_LEADS_AUTH_TOKEN_SECRET}:latest,VIL_REDIS_PASSWORD=${_REDIS_PASSWORD_SECRET}:latest,VIL_PAYMENTS_WEBHOOK_SECRET_PATH=${_PAYMENTS_WEBHOOK_SECRET}:latest,VIL_PAYMENTS_INTERNAL_VERIFY_AUTH_TOKEN=${_PAYMENTS_INTERNAL_VERIFY_AUTH_TOKEN_SECRET}:latest,VIL_PAYMENTS_INFINITEPAY_API_TOKEN=${_PAYMENTS_INFINITEPAY_API_TOKEN_SECRET}:latest,VIL_PAYMENTS_WEBHOOK_URL=${_PAYMENTS_WEBHOOK_URL_SECRET}:latest
 
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        gcloud run deploy edn-core-prd-worker \
+          --image ${_WORKER_IMAGE} \
+          --region ${_REGION} \
+          --platform managed \
+          --no-allow-unauthenticated \
+          --ingress internal \
+          --execution-environment gen2 \
+          --port 8080 \
+          --memory 512Mi \
+          --cpu 1 \
+          --concurrency 1 \
+          --min-instances 1 \
+          --max-instances 1 \
+          --timeout 300 \
+          --service-account ${_WORKER_SERVICE_ACCOUNT} \
+          --env-vars-file .env.production \
+          --set-secrets VIL_MONGODB_URI=${_MONGODB_URI_SECRET}:latest,VIL_REDIS_PASSWORD=${_REDIS_PASSWORD_SECRET}:latest
+
 images:
-  - ${_IMAGE}
+  - ${_APP_IMAGE}
+  - ${_WORKER_IMAGE}
 
 substitutions:
   _REGION: southamerica-east1
   _ARTIFACT_REPOSITORY: edn-core
-  _IMAGE: ${_REGION}-docker.pkg.dev/funcionario-online-493412/${_ARTIFACT_REPOSITORY}/edn-core-prd:${SHORT_SHA}
+  _APP_IMAGE: ${_REGION}-docker.pkg.dev/funcionario-online-493412/${_ARTIFACT_REPOSITORY}/edn-core-prd:${SHORT_SHA}
+  _WORKER_IMAGE: ${_REGION}-docker.pkg.dev/funcionario-online-493412/${_ARTIFACT_REPOSITORY}/edn-core-prd-worker:${SHORT_SHA}
   _RUNTIME_SERVICE_ACCOUNT: edn-core-prd@funcionario-online-493412.iam.gserviceaccount.com
+  _WORKER_SERVICE_ACCOUNT: edn-core-prd@funcionario-online-493412.iam.gserviceaccount.com
   _MONGODB_URI_SECRET: edn-core-prd-mongodb-uri
   _LEADS_AUTH_TOKEN_SECRET: edn-core-prd-leads-auth-token
   _REDIS_PASSWORD_SECRET: edn-core-prd-redis-password

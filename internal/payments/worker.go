@@ -17,7 +17,6 @@ import (
 type ActivationService struct {
 	orders        OrderRepository
 	subscriptions SubscriptionRepository
-	plans         PlanRepository
 	cache         StatusCache
 	log           *zap.Logger
 }
@@ -25,14 +24,12 @@ type ActivationService struct {
 func NewActivationService(
 	orders OrderRepository,
 	subscriptions SubscriptionRepository,
-	plans PlanRepository,
 	cache StatusCache,
 	log *zap.Logger,
 ) *ActivationService {
 	return &ActivationService{
 		orders:        orders,
 		subscriptions: subscriptions,
-		plans:         plans,
 		cache:         cache,
 		log:           log,
 	}
@@ -48,25 +45,22 @@ func (s *ActivationService) Activate(ctx context.Context, event PaymentApprovedE
 		return nil
 	}
 
-	// Load plan to calculate ends_at
-	plan, err := s.plans.FindActiveBySlugAndCycle(ctx, event.PlanSlug, "")
+	order, err := s.orders.GetByNSU(ctx, event.OrderNSU)
 	if err != nil {
-		// Try finding without billing cycle (plan may have been deactivated)
-		s.log.Warn("could not find active plan by slug for activation", zap.String("plan_slug", event.PlanSlug), zap.Error(err))
-		// Use event amounts directly for activation, plan lookup failure is non-fatal
+		return fmt.Errorf("get order for activation %s: %w", event.OrderNSU, err)
 	}
 
 	now := time.Now().UTC()
 	startsAt := now
-	endsAt := calculateEndsAt(now, event.PlanSlug, plan)
+	endsAt := calculateEndsAt(now, order.BillingCycle)
 
 	// Create or ensure subscription exists
 	if existing == nil {
 		sub := checkout.Subscription{
 			SubscriptionID: uuid.New().String(),
-			CustomerEmail:  event.CustomerEmail,
-			PlanID:         event.PlanID,
-			PlanSlug:       event.PlanSlug,
+			CustomerEmail:  order.CustomerEmail,
+			PlanID:         order.PlanID,
+			PlanSlug:       order.PlanSlug,
 			Status:         string(SubscriptionStatusPendingActivation),
 			OriginOrderNSU: event.OrderNSU,
 			StartsAt:       startsAt,
@@ -135,15 +129,12 @@ func (d *OutboxDispatcher) Dispatch(ctx context.Context, batchSize int) error {
 	return nil
 }
 
-func calculateEndsAt(from time.Time, planSlug string, plan *checkout.Plan) time.Time {
-	if plan != nil {
-		switch plan.BillingCycle {
-		case "monthly":
-			return from.AddDate(0, 1, 0)
-		case "annual":
-			return from.AddDate(1, 0, 0)
-		}
+func calculateEndsAt(from time.Time, billingCycle string) time.Time {
+	switch billingCycle {
+	case "annual":
+		return from.AddDate(1, 0, 0)
+	case "monthly":
+		return from.AddDate(0, 1, 0)
 	}
-	// Default: 30 days if plan not found
 	return from.AddDate(0, 1, 0)
 }

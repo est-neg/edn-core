@@ -76,6 +76,8 @@ func (s *WebhookService) Handle(ctx context.Context, rawBody []byte) error {
 	if minimal.TransactionNSU == "" || minimal.OrderNSU == "" {
 		return fmt.Errorf("%w: missing transaction_id or order_id", ErrInvalidRequest)
 	}
+	var webhookEvent checkout.WebhookEvent
+	var hasExistingEvent bool
 
 	// Step 2: Redis fast-path dedup
 	txSeen, hashSeen, err := s.idem.CheckWebhookDedup(ctx, minimal.TransactionNSU, eventHash)
@@ -83,12 +85,15 @@ func (s *WebhookService) Handle(ctx context.Context, rawBody []byte) error {
 		s.log.Warn("redis dedup check failed, falling through to mongo", zap.Error(err))
 	}
 	if txSeen || hashSeen {
-		// Fast path: likely duplicate
-		// Still verify in Mongo for authoritative confirmation
-		exists, mongoErr := s.webhooks.ExistsByEventHash(ctx, eventHash)
-		if mongoErr == nil && exists {
-			s.log.Info("duplicate webhook ignored", zap.String("event_hash", eventHash))
-			return nil
+		txEvents, mongoErr := s.webhooks.FindByTransactionNSU(ctx, minimal.TransactionNSU)
+		if mongoErr == nil {
+			if processed, existing := selectWebhookEventForProcessing(txEvents); processed {
+				s.log.Info("duplicate webhook ignored", zap.String("transaction_nsu", minimal.TransactionNSU))
+				return nil
+			} else if existing != nil {
+				webhookEvent = *existing
+				hasExistingEvent = true
+			}
 		}
 	}
 
@@ -99,14 +104,20 @@ func (s *WebhookService) Handle(ctx context.Context, rawBody []byte) error {
 	}
 	defer s.lock.ReleaseOrderLock(ctx, minimal.OrderNSU, lockToken) //nolint:errcheck
 
-	// Step 4: Authoritative Mongo dedup (after lock)
-	exists, err := s.webhooks.ExistsByEventHash(ctx, eventHash)
+	// Step 4: Authoritative transaction dedup (after lock)
+	txEvents, err := s.webhooks.FindByTransactionNSU(ctx, minimal.TransactionNSU)
 	if err != nil {
-		s.log.Warn("mongo dedup check failed", zap.String("event_hash", eventHash), zap.Error(err))
-	}
-	if exists {
-		s.log.Info("duplicate webhook confirmed in mongo", zap.String("event_hash", eventHash))
-		return nil
+		s.log.Warn("mongo transaction dedup check failed", zap.String("transaction_nsu", minimal.TransactionNSU), zap.Error(err))
+	} else {
+		processed, existing := selectWebhookEventForProcessing(txEvents)
+		if processed {
+			s.log.Info("duplicate webhook confirmed in mongo", zap.String("transaction_nsu", minimal.TransactionNSU))
+			return nil
+		}
+		if existing != nil {
+			webhookEvent = *existing
+			hasExistingEvent = true
+		}
 	}
 
 	// Step 5: Load order
@@ -125,22 +136,24 @@ func (s *WebhookService) Handle(ctx context.Context, rawBody []byte) error {
 	rawBSON, _ := bson.Marshal(bson.M{"raw": string(rawBody)})
 
 	// Step 7: Persist raw webhook event
-	webhookEvent := checkout.WebhookEvent{
-		EventID:        uuid.New().String(),
-		Provider:       "infinitepay",
-		EventHash:      eventHash,
-		OrderNSU:       minimal.OrderNSU,
-		TransactionNSU: minimal.TransactionNSU,
-		Status:         string(verified.Status),
-		RawPayload:     rawBSON,
-		ReceivedAt:     now,
-	}
-	if err := s.webhooks.Insert(ctx, webhookEvent); err != nil {
-		// ErrDuplicateWebhook from Mongo means concurrent duplicate — safe to ignore
-		if err == checkout.ErrDuplicateWebhook {
-			return nil
+	if !hasExistingEvent {
+		webhookEvent = checkout.WebhookEvent{
+			EventID:        uuid.New().String(),
+			Provider:       "infinitepay",
+			EventHash:      eventHash,
+			OrderNSU:       minimal.OrderNSU,
+			TransactionNSU: minimal.TransactionNSU,
+			Status:         string(verified.Status),
+			RawPayload:     rawBSON,
+			ReceivedAt:     now,
 		}
-		return fmt.Errorf("persist webhook event: %w", err)
+		if err := s.webhooks.Insert(ctx, webhookEvent); err != nil {
+			// ErrDuplicateWebhook from Mongo means concurrent duplicate — safe to ignore
+			if err == checkout.ErrDuplicateWebhook {
+				return nil
+			}
+			return fmt.Errorf("persist webhook event: %w", err)
+		}
 	}
 
 	// Step 8: Set Redis dedup keys
@@ -216,6 +229,24 @@ func (s *WebhookService) Handle(ctx context.Context, rawBody []byte) error {
 		zap.String("order_status", string(orderStatus)),
 	)
 	return nil
+}
+
+func selectWebhookEventForProcessing(events []checkout.WebhookEvent) (bool, *checkout.WebhookEvent) {
+	for i := range events {
+		if events[i].ProcessedAt != nil {
+			return true, nil
+		}
+	}
+	if len(events) == 0 {
+		return false, nil
+	}
+	selected := events[0]
+	for i := 1; i < len(events); i++ {
+		if events[i].ReceivedAt.Before(selected.ReceivedAt) {
+			selected = events[i]
+		}
+	}
+	return false, &selected
 }
 
 func mapPaymentToOrderStatus(ps PaymentStatus, amountMatch bool) OrderStatus {

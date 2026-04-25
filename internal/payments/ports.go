@@ -5,12 +5,32 @@ import (
 	"time"
 
 	"github.com/villenneve/vil-core/internal/checkout"
+	"github.com/villenneve/vil-core/internal/idempotency"
+	"github.com/villenneve/vil-core/internal/organizations"
+	commercialplans "github.com/villenneve/vil-core/internal/plans"
+	"github.com/villenneve/vil-core/internal/tenants"
 )
 
 // PlanRepository is the read port for plan catalog.
 type PlanRepository interface {
 	FindActiveBySlugAndCycle(ctx context.Context, slug, billingCycle string) (*checkout.Plan, error)
 	ListActive(ctx context.Context) ([]checkout.Plan, error)
+}
+
+// OrganizationRepository resolves public organization slugs to durable organization ids.
+type OrganizationRepository interface {
+	FindBySlug(ctx context.Context, slug string) (*organizations.Organization, error)
+}
+
+// TenantRepository resolves public tenant slugs inside an organization.
+type TenantRepository interface {
+	FindByOrgAndSlug(ctx context.Context, organizationID, slug string) (*tenants.Tenant, error)
+}
+
+// VersionedPlanRepository resolves tenant-scoped published commercial plans.
+type VersionedPlanRepository interface {
+	FindSellableByTenantSlug(ctx context.Context, tenantID, slug, billingCycle, channel string, at time.Time) (*commercialplans.Plan, error)
+	ListActiveByTenant(ctx context.Context, tenantID, channel string) ([]commercialplans.Plan, error)
 }
 
 // OrderRepository is the write/read port for checkout orders.
@@ -39,6 +59,7 @@ type SubscriptionRepository interface {
 type WebhookEventRepository interface {
 	Insert(ctx context.Context, event checkout.WebhookEvent) error
 	ExistsByEventHash(ctx context.Context, eventHash string) (bool, error)
+	FindByTransactionNSU(ctx context.Context, transactionNSU string) ([]checkout.WebhookEvent, error)
 	MarkProcessed(ctx context.Context, id string, processedAt time.Time) error
 }
 
@@ -73,6 +94,14 @@ type StatusCache interface {
 	GetOrderStatus(ctx context.Context, orderNSU string) (string, bool, error)
 	SetOrderStatus(ctx context.Context, orderNSU, status string) error
 	InvalidateOrderStatus(ctx context.Context, orderNSU string) error
+}
+
+// CheckoutIdempotencyRepository is the durable authority for checkout idempotency.
+type CheckoutIdempotencyRepository interface {
+	Reserve(ctx context.Context, key idempotency.Key) error
+	FindByTenantOpKey(ctx context.Context, tenantID, operation, idempotencyKey string) (*idempotency.Key, error)
+	Commit(ctx context.Context, tenantID, operation, idempotencyKey, resourceID, resourceStatus, resourceURL, externalRef string, updatedAt time.Time) error
+	Fail(ctx context.Context, tenantID, operation, idempotencyKey string, updatedAt time.Time) error
 }
 
 // PaymentEventPublisher publishes payment domain events.

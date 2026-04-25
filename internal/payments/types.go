@@ -40,9 +40,20 @@ const (
 
 // CreateCheckoutRequest is the inbound HTTP request for POST /v1/checkout/sessions.
 type CreateCheckoutRequest struct {
-	PlanSlug     string          `json:"plan_slug"`
-	BillingCycle string          `json:"billing_cycle"`
-	Customer     CustomerPayload `json:"customer"`
+	OrganizationSlug string          `json:"organization_slug,omitempty"`
+	TenantSlug       string          `json:"tenant_slug,omitempty"`
+	Channel          string          `json:"channel,omitempty"`
+	PlanSlug         string          `json:"plan_slug"`
+	BillingCycle     string          `json:"billing_cycle"`
+	Customer         CustomerPayload `json:"customer"`
+	IdempotencyKey   string          `json:"-"`
+}
+
+// PlanListQuery is the inbound query contract for GET /v1/plans.
+type PlanListQuery struct {
+	OrganizationSlug string
+	TenantSlug       string
+	Channel          string
 }
 
 // CustomerPayload holds the customer fields nested in CreateCheckoutRequest.
