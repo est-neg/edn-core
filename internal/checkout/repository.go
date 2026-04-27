@@ -5,15 +5,6 @@ import (
 	"time"
 )
 
-// PlanRepository defines persistence operations for pricing plans.
-type PlanRepository interface {
-	Create(ctx context.Context, plan Plan) error
-	FindByID(ctx context.Context, id string) (*Plan, error)
-	FindBySlugAndCycle(ctx context.Context, slug, billingCycle string) (*Plan, error)
-	ListActive(ctx context.Context) ([]Plan, error)
-	Deactivate(ctx context.Context, id string, updatedAt time.Time) error
-}
-
 // OrderRepository defines persistence operations for checkout orders.
 // All mutations must be performed under an acquired Redis order lock.
 type OrderRepository interface {

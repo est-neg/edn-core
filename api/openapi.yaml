@@ -18,6 +18,10 @@ tags:
     description: Probes de disponibilidade
   - name: Leads
     description: Captura e qualificação de leads
+  - name: Organizations
+    description: Gestão de organizações (entidade raiz administrativa)
+  - name: Tenants
+    description: Gestão de tenants (unidade operacional dentro de uma organização)
   - name: Plans
     description: Catálogo de planos disponíveis
   - name: Checkout
@@ -95,27 +99,262 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
+  # ── Organizations ────────────────────────────────────────────────────────────
+
+  /api/v1/organizations:
+    get:
+      summary: Listar organizações
+      tags: [Organizations]
+      security:
+        - adminAuth: []
+      responses:
+        '200':
+          description: Lista de organizações
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Organization'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      summary: Criar organização
+      tags: [Organizations]
+      security:
+        - adminAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOrganizationRequest'
+            example:
+              slug: edn-core
+              name: Estaleiro de Negocios
+              legal_name: ESTALEIRO DE NEGOCIOS LTDA
+              cnpj: "62.124.197/0001-28"
+              billing_email: gillylopes@gmail.com
+              phone: "(69) 9206-0958"
+              address:
+                street: R ANTONIO SAAD
+                number: "2500"
+                complement: COND TERRA NOVA CASA 395
+                district: BOA VISTA
+                city: PONTA GROSSA
+                state: PR
+                postal_code: "84073-170"
+                country: BR
+      responses:
+        '201':
+          description: Organização criada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Organization'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Slug ou UUID duplicado
+
+  /api/v1/organizations/{orgUUID}:
+    parameters:
+      - name: orgUUID
+        in: path
+        required: true
+        schema:
+          type: string
+        description: UUID da organização
+    get:
+      summary: Obter organização
+      tags: [Organizations]
+      security:
+        - adminAuth: []
+      responses:
+        '200':
+          description: Organização encontrada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Organization'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Não encontrada
+    put:
+      summary: Atualizar organização
+      tags: [Organizations]
+      security:
+        - adminAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateOrganizationRequest'
+      responses:
+        '200':
+          description: Atualizada com sucesso
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Não encontrada
+    delete:
+      summary: Desativar organização
+      description: Define `active=false`. Não remove o documento.
+      tags: [Organizations]
+      security:
+        - adminAuth: []
+      responses:
+        '204':
+          description: Desativada
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Não encontrada
+
+  # ── Tenants ──────────────────────────────────────────────────────────────────
+
+  /api/v1/organizations/{orgUUID}/tenants:
+    parameters:
+      - name: orgUUID
+        in: path
+        required: true
+        schema:
+          type: string
+        description: UUID da organização
+    get:
+      summary: Listar tenants da organização
+      tags: [Tenants]
+      security:
+        - adminAuth: []
+      responses:
+        '200':
+          description: Lista de tenants
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Tenant'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      summary: Criar tenant
+      tags: [Tenants]
+      security:
+        - adminAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTenantRequest'
+            example:
+              slug: fun-onl
+              name: Funcionario Online
+              channels: [web, mobile]
+      responses:
+        '201':
+          description: Tenant criado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tenant'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Slug duplicado na organização
+
+  /api/v1/organizations/{orgUUID}/tenants/{tenantUUID}:
+    parameters:
+      - name: orgUUID
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: tenantUUID
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Obter tenant
+      tags: [Tenants]
+      security:
+        - adminAuth: []
+      responses:
+        '200':
+          description: Tenant encontrado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tenant'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Não encontrado
+    put:
+      summary: Atualizar tenant
+      tags: [Tenants]
+      security:
+        - adminAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTenantRequest'
+      responses:
+        '200':
+          description: Atualizado com sucesso
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Não encontrado
+    delete:
+      summary: Desativar tenant
+      description: Define `active=false`. Não remove o documento.
+      tags: [Tenants]
+      security:
+        - adminAuth: []
+      responses:
+        '204':
+          description: Desativado
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Não encontrado
+
   # ── Plans ───────────────────────────────────────────────────────────────────
 
   /v1/plans:
     get:
       summary: Listar planos ativos
       description: |
-        Retorna os planos disponíveis para checkout.
-        Quando `organization_slug` e `tenant_slug` são informados, o backend resolve o tenant em runtime
-        e consulta a coleção `versioned_plans`. Sem esse escopo, o caminho legado continua disponível.
+        Retorna os planos disponíveis para checkout do tenant.
+        `organization_slug` e `tenant_slug` são obrigatórios. O backend resolve o tenant
+        em runtime e consulta a coleção `versioned_plans`.
       tags: [Plans]
       parameters:
         - name: organization_slug
           in: query
-          required: false
-          description: Slug público da organização. Deve ser enviado junto com `tenant_slug`.
+          required: true
+          description: Slug público da organização.
           schema:
             type: string
         - name: tenant_slug
           in: query
-          required: false
-          description: Slug público do tenant. Deve ser enviado junto com `organization_slug`.
+          required: true
+          description: Slug público do tenant.
           schema:
             type: string
         - name: channel
@@ -158,7 +397,7 @@ paths:
         Cria um pedido e retorna a URL de checkout hospedada pela InfinitePay.
         O preço é sempre resolvido pelo backend a partir do plano — nunca aceito do cliente.
         O cliente deve enviar o header `Idempotency-Key` para garantir retry seguro.
-        Para catálogo multi-tenant, envie `organization_slug` e `tenant_slug`; o backend resolve o tenant
+        `organization_slug` e `tenant_slug` são obrigatórios; o backend resolve o tenant
         em runtime e seleciona o plano publicado em `versioned_plans`.
       tags: [Checkout]
       parameters:
@@ -239,6 +478,10 @@ components:
       type: http
       scheme: bearer
       description: Token de autenticação da leads API (VIL_LEADS_AUTH_TOKEN)
+    adminAuth:
+      type: http
+      scheme: bearer
+      description: Token de administração para organizations/tenants (VIL_HTTP_ADMIN_AUTH_TOKEN)
 
   responses:
     BadRequest:
@@ -253,6 +496,166 @@ components:
       description: Rate limit excedido
 
   schemas:
+
+    # ── Organizations ────────────────────────────────────────────────────────
+
+    Address:
+      type: object
+      properties:
+        street:
+          type: string
+        number:
+          type: string
+        complement:
+          type: string
+        district:
+          type: string
+        city:
+          type: string
+        state:
+          type: string
+          minLength: 2
+          maxLength: 2
+          example: PR
+        postal_code:
+          type: string
+          example: "84073-170"
+        country:
+          type: string
+          example: BR
+
+    Organization:
+      type: object
+      properties:
+        org_uuid:
+          type: string
+        slug:
+          type: string
+        name:
+          type: string
+        legal_name:
+          type: string
+        cnpj:
+          type: string
+          example: "62.124.197/0001-28"
+        billing_email:
+          type: string
+          format: email
+        phone:
+          type: string
+        address:
+          $ref: '#/components/schemas/Address'
+        active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateOrganizationRequest:
+      type: object
+      required: [slug, name, billing_email]
+      properties:
+        slug:
+          type: string
+          minLength: 2
+          maxLength: 64
+        name:
+          type: string
+          minLength: 2
+          maxLength: 200
+        legal_name:
+          type: string
+        cnpj:
+          type: string
+        billing_email:
+          type: string
+          format: email
+        phone:
+          type: string
+        address:
+          $ref: '#/components/schemas/Address'
+
+    UpdateOrganizationRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        legal_name:
+          type: string
+        cnpj:
+          type: string
+        billing_email:
+          type: string
+          format: email
+        phone:
+          type: string
+        address:
+          $ref: '#/components/schemas/Address'
+        active:
+          type: boolean
+
+    # ── Tenants ──────────────────────────────────────────────────────────────
+
+    Tenant:
+      type: object
+      properties:
+        tenant_uuid:
+          type: string
+        organization_id:
+          type: string
+          description: Referência ao org_uuid da organização pai
+        slug:
+          type: string
+        name:
+          type: string
+        channels:
+          type: array
+          items:
+            type: string
+            enum: [web, mobile, partner]
+        active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateTenantRequest:
+      type: object
+      required: [slug, name]
+      properties:
+        slug:
+          type: string
+          minLength: 2
+          maxLength: 64
+        name:
+          type: string
+          minLength: 2
+          maxLength: 200
+        channels:
+          type: array
+          items:
+            type: string
+            enum: [web, mobile, partner]
+          default: [web]
+
+    UpdateTenantRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        channels:
+          type: array
+          items:
+            type: string
+            enum: [web, mobile, partner]
+        active:
+          type: boolean
 
     # ── Leads ────────────────────────────────────────────────────────────────
 
@@ -312,14 +715,14 @@ components:
 
     CreateCheckoutRequest:
       type: object
-      required: [plan_slug, billing_cycle, customer]
+      required: [organization_slug, tenant_slug, plan_slug, billing_cycle, customer]
       properties:
         organization_slug:
           type: string
-          description: Slug público da organização. Deve ser enviado junto com `tenant_slug` para o catálogo multi-tenant.
+          description: Slug público da organização.
         tenant_slug:
           type: string
-          description: Slug público do tenant. Deve ser enviado junto com `organization_slug` para o catálogo multi-tenant.
+          description: Slug público do tenant.
         channel:
           type: string
           enum: [web, mobile, partner, all]

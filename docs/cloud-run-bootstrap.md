@@ -42,7 +42,7 @@ O runtime anterior usava `scratch`. Para MongoDB Atlas, a conexão padrão exige
 
 ## Environment Model
 
-Os arquivos [../.env.development](../.env.development) e [../.env.production](../.env.production) existem como arquivos de input para `gcloud run deploy --env-vars-file`, não como repositório de segredos.
+Os arquivos [../deploy/env/cloudrun.development.yaml](../deploy/env/cloudrun.development.yaml) e [../deploy/env/cloudrun.production.yaml](../deploy/env/cloudrun.production.yaml) existem como arquivos de input para `gcloud run deploy --env-vars-file`, não como repositório de segredos.
 
 Entram nesses arquivos apenas valores não sensíveis:
 
@@ -63,7 +63,7 @@ Segredos ficam fora do Git e são injetados por Secret Manager:
 
 O arquivo [cloudbuild.development.yaml](../cloudbuild.development.yaml) publica imagem em Artifact Registry e faz deploy do serviço `edn-core-dev` com:
 
-- `--env-vars-file .env.development`
+- `--env-vars-file deploy/env/cloudrun.development.yaml`
 - `--set-secrets` para URI Mongo e token do webhook de leads
 - escalonamento mais conservador para desenvolvimento
 
@@ -79,7 +79,7 @@ O mesmo pipeline publica um segundo binário para `edn-core-dev-worker` com:
 
 O arquivo [cloudbuild.yaml](../cloudbuild.yaml) faz deploy do serviço `edn-core-prd` com:
 
-- `--env-vars-file .env.production`
+- `--env-vars-file deploy/env/cloudrun.production.yaml`
 - `--set-secrets` para URI Mongo e token do webhook de leads
 - `min-instances=1` para reduzir cold start
 - limites de concorrência mais altos
@@ -88,7 +88,7 @@ O mesmo pipeline também publica `edn-core-prd-worker` com a mesma imagem-base p
 
 ## Secret Handling
 
-Mesmo com a string de conexão fornecida para análise, ela não deve ser gravada em `.env.production`, `cloudbuild.yaml`, Dockerfile ou qualquer arquivo versionado.
+Mesmo com a string de conexão fornecida para análise, ela não deve ser gravada em `deploy/env/cloudrun.production.yaml`, `cloudbuild.yaml`, Dockerfile ou qualquer arquivo versionado.
 
 Segredos recomendados no GCP:
 

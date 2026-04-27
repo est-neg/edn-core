@@ -33,6 +33,7 @@ type PaymentsConfig struct {
 type InfinitePayConfig struct {
 	BaseURL  string `mapstructure:"base_url"`
 	APIToken string `mapstructure:"api_token"`
+	Handle   string `mapstructure:"handle"`
 }
 
 // PubSubConfig holds Google Cloud Pub/Sub settings.
@@ -48,7 +49,6 @@ type MongoConfig struct {
 	Database                  string `mapstructure:"database"`
 	ConnectTimeoutSec         int    `mapstructure:"connect_timeout_sec"`
 	CollectionLeads           string `mapstructure:"collection_leads"`
-	CollectionPlans           string `mapstructure:"collection_plans"`
 	CollectionOrders          string `mapstructure:"collection_orders"`
 	CollectionPayments        string `mapstructure:"collection_payments"`
 	CollectionSubscriptions   string `mapstructure:"collection_subscriptions"`
@@ -79,6 +79,7 @@ type RedisConfig struct {
 type LeadsConfig struct {
 	AuthHeader             string `mapstructure:"auth_header"`
 	AuthToken              string `mapstructure:"auth_token"`
+	TenantID               string `mapstructure:"tenant_id"`
 	MaxBodyBytes           int64  `mapstructure:"max_body_bytes"`
 	DedupWindowSec         int    `mapstructure:"dedup_window_sec"`
 	RateLimitRequests      int    `mapstructure:"rate_limit_requests_per_minute"`
@@ -97,6 +98,9 @@ type HTTPConfig struct {
 	// CORSAllowedOrigins is a comma-separated list of origins allowed via CORS.
 	// Example: "https://developer.funcionario.online,https://funcionario.online"
 	CORSAllowedOrigins string `mapstructure:"cors_allowed_origins"`
+	// AdminAuthToken is the full expected Authorization header value for admin endpoints.
+	// Must be set explicitly (e.g. VIL_HTTP_ADMIN_AUTH_TOKEN). Fail-closed if empty.
+	AdminAuthToken string `mapstructure:"admin_auth_token"`
 }
 
 // LogConfig holds logger settings.
@@ -117,6 +121,7 @@ func Load() (*Config, error) {
 	v.SetDefault("http.write_timeout_sec", 30)
 	v.SetDefault("http.idle_timeout_sec", 120)
 	v.SetDefault("http.cors_allowed_origins", "")
+	v.SetDefault("http.admin_auth_token", "")
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.json", true)
 	// mongodb — uri and database have no fallback but must be registered so
@@ -126,7 +131,6 @@ func Load() (*Config, error) {
 	v.SetDefault("mongodb.database", "")
 	v.SetDefault("mongodb.connect_timeout_sec", 10)
 	v.SetDefault("mongodb.collection_leads", "leads")
-	v.SetDefault("mongodb.collection_plans", "plans")
 	v.SetDefault("mongodb.collection_orders", "orders")
 	v.SetDefault("mongodb.collection_payments", "payments")
 	v.SetDefault("mongodb.collection_subscriptions", "subscriptions")
@@ -149,6 +153,7 @@ func Load() (*Config, error) {
 	// leads
 	v.SetDefault("leads.auth_header", "Authorization")
 	v.SetDefault("leads.auth_token", "")
+	v.SetDefault("leads.tenant_id", "seed-ten-fun-onl-001")
 	v.SetDefault("leads.max_body_bytes", 16384) // 16 KiB
 	v.SetDefault("leads.dedup_window_sec", 300) // 5 minutes
 	v.SetDefault("leads.rate_limit_requests_per_minute", 60)
@@ -165,6 +170,7 @@ func Load() (*Config, error) {
 	v.SetDefault("payments.outbox_dispatch_interval_sec", 30)
 	v.SetDefault("payments.infinitepay.base_url", "")
 	v.SetDefault("payments.infinitepay.api_token", "")
+	v.SetDefault("payments.infinitepay.handle", "")
 	// pubsub
 	v.SetDefault("pubsub.project_id", "")
 	v.SetDefault("pubsub.payment_approved_topic", "")

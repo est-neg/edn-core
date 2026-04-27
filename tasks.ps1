@@ -1,4 +1,4 @@
-﻿param(
+param(
     [Parameter(Position=0)]
     [string]$Task = "help"
 )
@@ -13,10 +13,11 @@ $CMD       = "./cmd/api"
 $CMD_PAY   = "./cmd/payments-api"
 $CMD_WRK   = "./cmd/subscription-worker"
 
-# Carrega um arquivo .env e seu override .local (gitignored) no processo corrente.
-# Linhas comecando com # sao ignoradas. O arquivo .local e opcional.
-function Import-Env([string]$envFile) {
-    foreach ($file in @($envFile, "$envFile.local")) {
+# Carrega uma lista explicita de arquivos .env no processo corrente.
+# Linhas comecando com # sao ignoradas. Arquivos ausentes sao ignorados silenciosamente.
+# Preferencia: .env.local (gitignored). .env.development legado local ainda e aceito como fallback.
+function Import-Env([string[]]$files) {
+    foreach ($file in $files) {
         if (Test-Path $file) {
             Get-Content $file | ForEach-Object {
                 if ($_ -notmatch '^\s*#' -and $_ -match '^\s*([^=]+)=(.*)$') {
@@ -32,7 +33,7 @@ function Import-Env([string]$envFile) {
 switch ($Task) {
 
     "dev" {
-        Import-Env ".env.development"
+        Import-Env @(".env.development", ".env.local")
         Write-Host ""
         Write-Host "EDN Core [development]" -ForegroundColor Green
         Write-Host "  API  -> http://localhost:8080" -ForegroundColor DarkGray
@@ -42,19 +43,19 @@ switch ($Task) {
     }
 
     "run-dev" {
-        Import-Env ".env.development"
+        Import-Env @(".env.development", ".env.local")
         Write-Host "payments-api [development]" -ForegroundColor Green
         go run $CMD_PAY
     }
 
     "run-worker-dev" {
-        Import-Env ".env.development"
+        Import-Env @(".env.development", ".env.local")
         Write-Host "subscription-worker [development]" -ForegroundColor Green
         go run $CMD_WRK
     }
 
     "run" {
-        Import-Env ".env.development"
+        Import-Env @(".env.development", ".env.local")
         Write-Host "leads API [development]" -ForegroundColor Green
         go run $CMD
     }
@@ -123,7 +124,7 @@ switch ($Task) {
     }
 
     "seed-dev" {
-        Import-Env ".env.development"
+        Import-Env @(".env.development", ".env.local")
         Write-Host "Seeding development database..." -ForegroundColor Cyan
         go run ./cmd/dev-seed
     }
@@ -161,7 +162,7 @@ switch ($Task) {
         Write-Host "    tidy             go mod tidy + verify"
         Write-Host "    clean            Remove artefatos de build"
         Write-Host ""
-        Write-Host "  Secrets locais: crie .env.development.local (gitignored)" -ForegroundColor DarkGray
+        Write-Host "  Secrets locais: prefira .env.local (gitignored); .env.development legado local ainda aceito" -ForegroundColor DarkGray
         Write-Host "  Uso: .\tasks.ps1 <target>" -ForegroundColor DarkGray
         Write-Host ""
     }

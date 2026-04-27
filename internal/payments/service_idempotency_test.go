@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.uber.org/zap"
 
 	"github.com/villenneve/vil-core/internal/checkout"
@@ -15,24 +16,6 @@ import (
 	"github.com/villenneve/vil-core/internal/platform/config"
 	"github.com/villenneve/vil-core/internal/tenants"
 )
-
-type fakePlanRepo struct {
-	plan *checkout.Plan
-}
-
-func (r *fakePlanRepo) FindActiveBySlugAndCycle(_ context.Context, slug, billingCycle string) (*checkout.Plan, error) {
-	if r.plan == nil || r.plan.Slug != slug || r.plan.BillingCycle != billingCycle {
-		return nil, ErrPlanNotFound
-	}
-	return r.plan, nil
-}
-
-func (r *fakePlanRepo) ListActive(_ context.Context) ([]checkout.Plan, error) {
-	if r.plan == nil {
-		return nil, nil
-	}
-	return []checkout.Plan{*r.plan}, nil
-}
 
 type fakeVersionedPlanRepo struct {
 	plan *commercialplans.Plan
@@ -231,19 +214,26 @@ func (r *fakeCheckoutIdempotencyRepo) Fail(_ context.Context, tenantID, operatio
 func newCheckoutServiceForIdempotencyTests() (*CheckoutService, *fakeProvider) {
 	provider := &fakeProvider{resp: InfinitePayCheckoutResponse{CheckoutURL: "https://checkout.example/session", InvoiceSlug: "inv-123"}}
 	service := NewCheckoutService(
-		&fakePlanRepo{plan: &checkout.Plan{
-			PlanID:          "plan-basic",
+		&fakeVersionedPlanRepo{plan: &commercialplans.Plan{
+			ID:              primitive.NewObjectID(),
+			PlanUUID:        "plan-basic",
+			OrganizationID:  "org-001",
+			TenantID:        "tenant-001",
 			Slug:            "basic",
+			Version:         1,
 			Name:            "Plano Basic",
-			BillingCycle:    "monthly",
+			BillingCycle:    commercialplans.BillingCycleMonthly,
 			PriceCents:      9900,
 			Currency:        "BRL",
-			Active:          true,
 			MaxInstallments: 1,
+			Channel:         commercialplans.ChannelAll,
+			Active:          true,
+			ValidFrom:       time.Now().UTC().Add(-time.Hour),
+			CreatedAt:       time.Now().UTC(),
+			UpdatedAt:       time.Now().UTC(),
 		}},
-		&fakeVersionedPlanRepo{},
-		&fakeOrganizationRepo{},
-		&fakeTenantRepo{},
+		&fakeOrganizationRepo{org: &organizations.Organization{OrgUUID: "org-001", Slug: "acme", Active: true}},
+		&fakeTenantRepo{tenant: &tenants.Tenant{TenantUUID: "tenant-001", OrganizationID: "org-001", Slug: "clinic", Active: true}},
 		newFakeOrderRepo(),
 		newFakeCheckoutIdempotencyRepo(),
 		provider,
@@ -257,10 +247,12 @@ func newCheckoutServiceForIdempotencyTests() (*CheckoutService, *fakeProvider) {
 
 func validCheckoutRequest() CreateCheckoutRequest {
 	return CreateCheckoutRequest{
-		Channel:        "web",
-		PlanSlug:       "basic",
-		BillingCycle:   "monthly",
-		IdempotencyKey: "checkout-key-001",
+		OrganizationSlug: "acme",
+		TenantSlug:       "clinic",
+		Channel:          "web",
+		PlanSlug:         "basic",
+		BillingCycle:     "monthly",
+		IdempotencyKey:   "checkout-key-001",
 		Customer: CustomerPayload{
 			Name:     "Joao Silva",
 			Email:    "joao@example.com",
@@ -338,19 +330,26 @@ func TestCheckoutService_CreateSession_ReplaysCommittedSnapshotWhenOrderPersiste
 	orders.updateStatusErr = errors.New("write concern timeout")
 	idempotencyRepo := newFakeCheckoutIdempotencyRepo()
 	service := NewCheckoutService(
-		&fakePlanRepo{plan: &checkout.Plan{
-			PlanID:          "plan-basic",
+		&fakeVersionedPlanRepo{plan: &commercialplans.Plan{
+			ID:              primitive.NewObjectID(),
+			PlanUUID:        "plan-basic",
+			OrganizationID:  "org-001",
+			TenantID:        "tenant-001",
 			Slug:            "basic",
+			Version:         1,
 			Name:            "Plano Basic",
-			BillingCycle:    "monthly",
+			BillingCycle:    commercialplans.BillingCycleMonthly,
 			PriceCents:      9900,
 			Currency:        "BRL",
 			Active:          true,
 			MaxInstallments: 1,
+			Channel:         commercialplans.ChannelAll,
+			ValidFrom:       time.Now().UTC().Add(-time.Hour),
+			CreatedAt:       time.Now().UTC(),
+			UpdatedAt:       time.Now().UTC(),
 		}},
-		&fakeVersionedPlanRepo{},
-		&fakeOrganizationRepo{},
-		&fakeTenantRepo{},
+		&fakeOrganizationRepo{org: &organizations.Organization{OrgUUID: "org-001", Slug: "acme", Active: true}},
+		&fakeTenantRepo{tenant: &tenants.Tenant{TenantUUID: "tenant-001", OrganizationID: "org-001", Slug: "clinic", Active: true}},
 		orders,
 		idempotencyRepo,
 		provider,

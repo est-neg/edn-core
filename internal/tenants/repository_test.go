@@ -66,6 +66,26 @@ func (r *fakeRepo) ListByOrg(_ context.Context, orgID string) ([]tenants.Tenant,
 	return out, nil
 }
 
+func (r *fakeRepo) Update(_ context.Context, tenantUUID string, tenant tenants.Tenant) error {
+	t, ok := r.byUUID[tenantUUID]
+	if !ok {
+		return tenants.ErrNotFound
+	}
+	t.Name = tenant.Name
+	t.Channels = tenant.Channels
+	t.Active = tenant.Active
+	return nil
+}
+
+func (r *fakeRepo) Deactivate(_ context.Context, tenantUUID string) error {
+	t, ok := r.byUUID[tenantUUID]
+	if !ok {
+		return tenants.ErrNotFound
+	}
+	t.Active = false
+	return nil
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 func newTenant(uuid, orgID, slug string) tenants.Tenant {

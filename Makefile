@@ -8,11 +8,13 @@ CMD_PAYMENTS     := ./cmd/payments-api
 CMD_WORKER       := ./cmd/subscription-worker
 GO               := go
 
-# Load .env file + .env.*.local (secrets, gitignored) into the shell environment.
-# Usage: $(call load-env,.env.development)
+# Load local env files into the shell environment. Non-fatal if files are absent.
+# .env.development: legacy local file, gitignored, still accepted as fallback.
+# .env.local: preferred, gitignored; overrides .env.development when both exist.
+# Usage: $(call load-env)
 define load-env
-	$(eval include $(1))
-	$(eval -include $(1).local)
+	$(eval -include .env.development)
+	$(eval -include .env.local)
 	$(eval export)
 endef
 
@@ -38,36 +40,36 @@ build-worker: ## Build the subscription-worker binary
 .PHONY: build-all
 build-all: build build-payments build-worker ## Build all binaries
 
-# ── Local run targets (auto-load .env.development + .env.development.local) ─────
+# ── Local run targets (.env.local preferred; .env.development legacy local also accepted) ──
 
 .PHONY: run
-run: ## Run the leads API with .env.development
-	$(call load-env,.env.development)
+run: ## Run the leads API (.env.local preferred; .env.development accepted as legacy fallback)
+	$(call load-env)
 	$(GO) run $(CMD)
 
 .PHONY: run-payments-dev
-run-payments-dev: ## Run payments-api with .env.development
-	$(call load-env,.env.development)
+run-payments-dev: ## Run payments-api (.env.local preferred; .env.development accepted as legacy fallback)
+	$(call load-env)
 	$(GO) run $(CMD_PAYMENTS)
 
 .PHONY: run-worker-dev
-run-worker-dev: ## Run subscription-worker with .env.development
-	$(call load-env,.env.development)
+run-worker-dev: ## Run subscription-worker (.env.local preferred; .env.development accepted as legacy fallback)
+	$(call load-env)
 	$(GO) run $(CMD_WORKER)
 
 # ── GCP deploy targets ───────────────────────────────────────────────────────
 
 .PHONY: deploy-dev
-deploy-dev: ## Deploy to Cloud Run edn-core-dev (uses .env.development + Secret Manager)
+deploy-dev: ## Deploy to Cloud Run edn-core-dev (uses deploy/env/cloudrun.development.yaml + Secret Manager)
 	gcloud builds submit --config cloudbuild.development.yaml . --project=funcionario-online-493412
 
 .PHONY: deploy-prd
-deploy-prd: ## Deploy to Cloud Run edn-core-prd (uses .env.production + Secret Manager)
+deploy-prd: ## Deploy to Cloud Run edn-core-prd (uses deploy/env/cloudrun.production.yaml + Secret Manager)
 	gcloud builds submit --config cloudbuild.yaml . --project=funcionario-online-493412
 
 .PHONY: seed-dev
-seed-dev: ## Seed development MongoDB with base commercial hierarchy (org/tenant/catalog/plans)
-	$(call load-env,.env.development)
+seed-dev: ## Seed development MongoDB (.env.local preferred; .env.development accepted as legacy fallback)
+	$(call load-env)
 	$(GO) run ./cmd/dev-seed
 
 .PHONY: test

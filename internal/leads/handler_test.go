@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"go.uber.org/zap"
 
@@ -41,15 +40,10 @@ func newHandler(t *testing.T, submitter leads.Submitter, token string) *leads.Ha
 
 func validBody() map[string]any {
 	return map[string]any{
-		"source":      "lumina-ia-site",
-		"submittedAt": time.Now().UTC().Format(time.RFC3339),
-		"lead": map[string]any{
-			"name":         "João Silva",
-			"businessName": "Clínica Saúde+",
-			"whatsapp":     "11999990000",
-			"profile":      "medical",
-			"consent":      true,
-		},
+		"name":   "João Silva",
+		"email":  "joao@example.com",
+		"phone":  "+5511999990000",
+		"source": "test",
 	}
 }
 
@@ -120,10 +114,10 @@ func TestHandler_WrongContentType_Returns400(t *testing.T) {
 	}
 }
 
-func TestHandler_InvalidSource_Returns400(t *testing.T) {
+func TestHandler_MissingEmail_Returns400(t *testing.T) {
 	h := newHandler(t, &fakeSubmitter{}, "Bearer secret")
 	body := validBody()
-	body["source"] = "unknown-source"
+	delete(body, "email")
 	rec := postLeads(t, h, body, "Bearer secret")
 
 	if rec.Code != http.StatusBadRequest {
@@ -135,39 +129,18 @@ func TestHandler_InvalidSource_Returns400(t *testing.T) {
 	}
 }
 
-func TestHandler_MissingConsentField_Returns400(t *testing.T) {
+func TestHandler_InvalidEmail_Returns400(t *testing.T) {
 	h := newHandler(t, &fakeSubmitter{}, "Bearer secret")
 	body := validBody()
-	lead := body["lead"].(map[string]any)
-	lead["consent"] = false
+	body["email"] = "not-an-email"
 	rec := postLeads(t, h, body, "Bearer secret")
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
 	}
-}
-
-func TestHandler_InvalidProfile_Returns400(t *testing.T) {
-	h := newHandler(t, &fakeSubmitter{}, "Bearer secret")
-	body := validBody()
-	lead := body["lead"].(map[string]any)
-	lead["profile"] = "veterinary"
-	rec := postLeads(t, h, body, "Bearer secret")
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", rec.Code)
-	}
-}
-
-func TestHandler_InvalidWhatsappNonDigits_Returns400(t *testing.T) {
-	h := newHandler(t, &fakeSubmitter{}, "Bearer secret")
-	body := validBody()
-	lead := body["lead"].(map[string]any)
-	lead["whatsapp"] = "+55 11 9999-0000"
-	rec := postLeads(t, h, body, "Bearer secret")
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", rec.Code)
+	resp := decodeError(t, rec)
+	if resp["error"] != "invalid_payload" {
+		t.Errorf("expected error=invalid_payload, got %q", resp["error"])
 	}
 }
 
@@ -185,7 +158,7 @@ func TestHandler_UnknownField_Returns400(t *testing.T) {
 func TestHandler_TrailingJSON_Returns400(t *testing.T) {
 	h := newHandler(t, &fakeSubmitter{}, "Bearer secret")
 	req := httptest.NewRequest(http.MethodPost, "/api/leads",
-		bytes.NewBufferString(`{"source":"lumina-ia-site","submittedAt":"2026-04-16T12:00:00Z","lead":{"name":"João Silva","businessName":"Clínica Saúde+","whatsapp":"11999990000","profile":"medical","consent":true}}{"extra":true}`),
+		bytes.NewBufferString(`{"name":"João Silva","email":"joao@example.com"}{"extra":true}`),
 	)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer secret")

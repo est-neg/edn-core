@@ -11,12 +11,6 @@ import (
 	"github.com/villenneve/vil-core/internal/tenants"
 )
 
-// PlanRepository is the read port for plan catalog.
-type PlanRepository interface {
-	FindActiveBySlugAndCycle(ctx context.Context, slug, billingCycle string) (*checkout.Plan, error)
-	ListActive(ctx context.Context) ([]checkout.Plan, error)
-}
-
 // OrganizationRepository resolves public organization slugs to durable organization ids.
 type OrganizationRepository interface {
 	FindBySlug(ctx context.Context, slug string) (*organizations.Organization, error)

@@ -31,58 +31,69 @@ func NewInfinitePayAdapter(baseURL, apiToken string, timeoutSec int, log *zap.Lo
 	}
 }
 
-// infinitePayCreateCheckoutPayload is the wire format for InfinitePay checkout creation.
-// Field names match InfinitePay's documented API schema.
-type infinitePayCreateCheckoutPayload struct {
-	OrderID     string              `json:"order_id"`
-	WebhookURL  string              `json:"webhook_url"`
-	RedirectURL string              `json:"redirect_url"`
-	Customer    infinitePayCustomer `json:"customer"`
+// infinitePayLinksPayload is the wire format for POST /links (InfinitePay checkout creation).
+type infinitePayLinksPayload struct {
+	Handle      string              `json:"handle"`
 	Items       []infinitePayItem   `json:"items"`
+	RedirectURL string              `json:"redirect_url"`
+	WebhookURL  string              `json:"webhook_url"`
+	Customer    infinitePayCustomer `json:"customer"`
 }
 
 type infinitePayCustomer struct {
-	Name     string `json:"name"`
-	Email    string `json:"email"`
-	Phone    string `json:"phone"`
-	Document string `json:"document"` // CPF (11 dígitos, sem formatação)
+	Name        string `json:"name"`
+	Email       string `json:"email"`
+	PhoneNumber string `json:"phone_number"`
 }
 
 type infinitePayItem struct {
-	Name        string `json:"name"`
 	Quantity    int    `json:"quantity"`
-	AmountCents int64  `json:"amount_cents"`
+	Price       int64  `json:"price"` // in cents
+	Description string `json:"description"`
 }
 
-type infinitePayCreateCheckoutResponse struct {
+// infinitePayLinksResponse uses tolerant field names to handle provider variations.
+type infinitePayLinksResponse struct {
+	// URL variants — provider may return any of these
 	CheckoutURL string `json:"checkout_url"`
-	InvoiceID   string `json:"invoice_id"`
+	Link        string `json:"link"`
+	URL         string `json:"url"`
+	// ID variants
+	InvoiceID string `json:"invoice_id"`
+	ID        string `json:"id"`
 }
 
-type infinitePayVerifyResponse struct {
+// infinitePayPaymentCheckPayload is the wire format for POST /payment_check.
+type infinitePayPaymentCheckPayload struct {
+	InvoiceID     string `json:"invoice_id,omitempty"`
+	OrderID       string `json:"order_id,omitempty"`
+	TransactionID string `json:"transaction_id,omitempty"`
+}
+
+// infinitePayPaymentCheckResponse is the parsed response from POST /payment_check.
+type infinitePayPaymentCheckResponse struct {
 	Status          string `json:"status"`
+	TransactionID   string `json:"transaction_id"`
 	PaidAmountCents int64  `json:"paid_amount_cents"`
 	Currency        string `json:"currency"`
 	ReceiptURL      string `json:"receipt_url"`
-	TransactionID   string `json:"transaction_id"`
 }
 
 func (a *infinitePayAdapter) CreateCheckout(ctx context.Context, req InfinitePayCheckoutRequest) (InfinitePayCheckoutResponse, error) {
-	payload := infinitePayCreateCheckoutPayload{
-		OrderID:     req.OrderNSU,
-		WebhookURL:  req.WebhookURL,
+	payload := infinitePayLinksPayload{
+		Handle:      req.Handle,
 		RedirectURL: req.RedirectURL,
+		WebhookURL:  req.WebhookURL,
 		Customer: infinitePayCustomer{
-			Name:     req.CustomerName,
-			Email:    req.CustomerEmail,
-			Phone:    req.CustomerPhone,
-			Document: req.CustomerDocument,
+			Name:        req.CustomerName,
+			Email:       req.CustomerEmail,
+			PhoneNumber: req.CustomerPhone,
 		},
 		Items: []infinitePayItem{
 			{
-				Name:        req.PlanName,
 				Quantity:    1,
-				AmountCents: req.AmountCents,
+				Price:       req.AmountCents,
+				Description: req.PlanName,
 			},
 		},
 	}
@@ -92,7 +103,7 @@ func (a *infinitePayAdapter) CreateCheckout(ctx context.Context, req InfinitePay
 		return InfinitePayCheckoutResponse{}, fmt.Errorf("marshal checkout payload: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+"/v1/checkout", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+"/links", bytes.NewReader(body))
 	if err != nil {
 		return InfinitePayCheckoutResponse{}, fmt.Errorf("build checkout request: %w", err)
 	}
@@ -112,23 +123,54 @@ func (a *infinitePayAdapter) CreateCheckout(ctx context.Context, req InfinitePay
 		return InfinitePayCheckoutResponse{}, fmt.Errorf("provider checkout status %d", resp.StatusCode)
 	}
 
-	var providerResp infinitePayCreateCheckoutResponse
+	var providerResp infinitePayLinksResponse
 	if err := json.Unmarshal(respBody, &providerResp); err != nil {
 		return InfinitePayCheckoutResponse{}, fmt.Errorf("decode checkout response: %w", err)
 	}
 
+	// Tolerant field resolution: accept checkout_url, link, or url
+	checkoutURL := providerResp.CheckoutURL
+	if checkoutURL == "" {
+		checkoutURL = providerResp.Link
+	}
+	if checkoutURL == "" {
+		checkoutURL = providerResp.URL
+	}
+
+	// Guard: URL must be present after tolerant resolution
+	if checkoutURL == "" {
+		return InfinitePayCheckoutResponse{}, fmt.Errorf("provider checkout missing checkout url")
+	}
+
+	// Tolerant ID resolution: accept invoice_id or id
+	invoiceID := providerResp.InvoiceID
+	if invoiceID == "" {
+		invoiceID = providerResp.ID
+	}
+
 	return InfinitePayCheckoutResponse{
-		CheckoutURL: providerResp.CheckoutURL,
-		InvoiceSlug: providerResp.InvoiceID,
+		CheckoutURL: checkoutURL,
+		InvoiceSlug: invoiceID,
 	}, nil
 }
 
 func (a *infinitePayAdapter) VerifyPayment(ctx context.Context, invoiceSlug, orderNSU, transactionNSU string) (InfinitePayVerifyResponse, error) {
-	url := fmt.Sprintf("%s/v1/payments/%s", a.baseURL, invoiceSlug)
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	payload := infinitePayPaymentCheckPayload{
+		InvoiceID:     invoiceSlug,
+		OrderID:       orderNSU,
+		TransactionID: transactionNSU,
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return InfinitePayVerifyResponse{}, fmt.Errorf("marshal verify payload: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+"/payment_check", bytes.NewReader(body))
 	if err != nil {
 		return InfinitePayVerifyResponse{}, fmt.Errorf("build verify request: %w", err)
 	}
+	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+a.apiToken)
 
 	resp, err := a.client.Do(httpReq)
@@ -143,7 +185,7 @@ func (a *infinitePayAdapter) VerifyPayment(ctx context.Context, invoiceSlug, ord
 		return InfinitePayVerifyResponse{}, fmt.Errorf("provider verify status %d", resp.StatusCode)
 	}
 
-	var providerResp infinitePayVerifyResponse
+	var providerResp infinitePayPaymentCheckResponse
 	if err := json.Unmarshal(respBody, &providerResp); err != nil {
 		return InfinitePayVerifyResponse{}, fmt.Errorf("decode verify response: %w", err)
 	}

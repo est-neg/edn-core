@@ -3,6 +3,7 @@ package tenants
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -69,4 +70,38 @@ func (r *mongoRepository) ListByOrg(ctx context.Context, organizationID string) 
 		return nil, fmt.Errorf("decode tenants: %w", err)
 	}
 	return out, nil
+}
+
+func (r *mongoRepository) Update(ctx context.Context, tenantUUID string, tenant Tenant) error {
+	filter := bson.D{{Key: "tenant_uuid", Value: tenantUUID}}
+	update := bson.D{{Key: "$set", Value: bson.D{
+		{Key: "name", Value: tenant.Name},
+		{Key: "channels", Value: tenant.Channels},
+		{Key: "active", Value: tenant.Active},
+		{Key: "updated_at", Value: time.Now().UTC()},
+	}}}
+	res, err := r.coll.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return fmt.Errorf("update tenant: %w", err)
+	}
+	if res.MatchedCount == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (r *mongoRepository) Deactivate(ctx context.Context, tenantUUID string) error {
+	filter := bson.D{{Key: "tenant_uuid", Value: tenantUUID}}
+	update := bson.D{{Key: "$set", Value: bson.D{
+		{Key: "active", Value: false},
+		{Key: "updated_at", Value: time.Now().UTC()},
+	}}}
+	res, err := r.coll.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return fmt.Errorf("deactivate tenant: %w", err)
+	}
+	if res.MatchedCount == 0 {
+		return ErrNotFound
+	}
+	return nil
 }

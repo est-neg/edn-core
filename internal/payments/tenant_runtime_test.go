@@ -18,7 +18,6 @@ func TestCheckoutService_CreateSession_UsesVersionedPlanForTenantScope(t *testin
 	orderRepo := newFakeOrderRepo()
 	provider := &fakeProvider{resp: InfinitePayCheckoutResponse{CheckoutURL: "https://checkout.example/versioned", InvoiceSlug: "inv-versioned"}}
 	service := NewCheckoutService(
-		&fakePlanRepo{},
 		&fakeVersionedPlanRepo{plan: &commercialplans.Plan{
 			ID:              primitive.NewObjectID(),
 			PlanUUID:        "plan-v3",
@@ -82,7 +81,6 @@ func TestCheckoutService_CreateSession_UsesVersionedPlanForTenantScope(t *testin
 
 func TestPlanQueryService_ListActivePlans_UsesTenantVersionedCatalog(t *testing.T) {
 	service := NewPlanQueryService(
-		&fakePlanRepo{},
 		&fakeVersionedPlanRepo{plan: &commercialplans.Plan{
 			ID:              primitive.NewObjectID(),
 			PlanUUID:        "plan-v4",

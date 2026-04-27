@@ -53,6 +53,38 @@ func (r *fakeRepo) FindBySlug(_ context.Context, slug string) (*organizations.Or
 	return o, nil
 }
 
+func (r *fakeRepo) List(_ context.Context) ([]organizations.Organization, error) {
+	out := make([]organizations.Organization, 0, len(r.byUUID))
+	for _, o := range r.byUUID {
+		out = append(out, *o)
+	}
+	return out, nil
+}
+
+func (r *fakeRepo) Update(_ context.Context, orgUUID string, org organizations.Organization) error {
+	o, ok := r.byUUID[orgUUID]
+	if !ok {
+		return organizations.ErrNotFound
+	}
+	o.Name = org.Name
+	o.LegalName = org.LegalName
+	o.CNPJ = org.CNPJ
+	o.BillingEmail = org.BillingEmail
+	o.Phone = org.Phone
+	o.Address = org.Address
+	o.Active = org.Active
+	return nil
+}
+
+func (r *fakeRepo) Deactivate(_ context.Context, orgUUID string) error {
+	o, ok := r.byUUID[orgUUID]
+	if !ok {
+		return organizations.ErrNotFound
+	}
+	o.Active = false
+	return nil
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 func newOrg(uuid, slug string) organizations.Organization {

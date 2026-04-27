@@ -37,31 +37,23 @@ func NewWebhookNotifier(url string) Notifier {
 
 func (n *WebhookNotifier) Notify(ctx context.Context, lead Lead) error {
 	body, err := json.Marshal(struct {
-		ID           string    `json:"id"`
-		Source       string    `json:"source"`
-		SubmittedAt  time.Time `json:"submittedAt"`
-		ReceivedAt   time.Time `json:"receivedAt"`
-		Name         string    `json:"name"`
-		BusinessName string    `json:"businessName"`
-		WhatsApp     string    `json:"whatsapp"`
-		Email        string    `json:"email,omitempty"`
-		Profile      string    `json:"profile"`
-		Message      string    `json:"message,omitempty"`
-		Consent      bool      `json:"consent"`
-		Status       string    `json:"status"`
+		ID         string    `json:"id"`
+		TenantID   string    `json:"tenant_id,omitempty"`
+		Source     string    `json:"source"`
+		ReceivedAt time.Time `json:"received_at"`
+		Name       string    `json:"name"`
+		Email      string    `json:"email"`
+		Phone      string    `json:"phone,omitempty"`
+		Status     string    `json:"status"`
 	}{
-		ID:           lead.ID,
-		Source:       lead.Source,
-		SubmittedAt:  lead.SubmittedAt,
-		ReceivedAt:   lead.ReceivedAt,
-		Name:         lead.Name,
-		BusinessName: lead.BusinessName,
-		WhatsApp:     lead.WhatsApp,
-		Email:        lead.Email,
-		Profile:      lead.Profile,
-		Message:      lead.Message,
-		Consent:      lead.Consent,
-		Status:       lead.Status,
+		ID:         lead.ID,
+		TenantID:   lead.TenantID,
+		Source:     lead.Source,
+		ReceivedAt: lead.ReceivedAt,
+		Name:       lead.Name,
+		Email:      lead.Email,
+		Phone:      lead.Phone,
+		Status:     lead.Status,
 	})
 	if err != nil {
 		return fmt.Errorf("marshal notification payload: %w", err)

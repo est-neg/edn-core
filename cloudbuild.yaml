@@ -10,6 +10,15 @@ steps:
           --location=${_REGION} \
           --description="Docker images for edn-core"
 
+  - name: golang:1.25-alpine
+    id: preflight
+    entrypoint: sh
+    args:
+      - -ceu
+      - |
+        go test -short -count=1 -timeout 120s ./internal/payments/... ./internal/platform/config/...
+        CGO_ENABLED=0 GOOS=linux go build -trimpath ./cmd/app ./cmd/subscription-worker ./cmd/payments-api
+
   - name: gcr.io/cloud-builders/docker
     args:
       - build
@@ -61,7 +70,7 @@ steps:
           --max-instances 1 \
           --timeout 300 \
           --service-account ${_RUNTIME_SERVICE_ACCOUNT} \
-          --env-vars-file .env.production \
+          --env-vars-file deploy/env/cloudrun.production.yaml \
           --set-secrets VIL_MONGODB_URI=${_MONGODB_URI_SECRET}:latest,VIL_LEADS_AUTH_TOKEN=${_LEADS_AUTH_TOKEN_SECRET}:latest,VIL_REDIS_PASSWORD=${_REDIS_PASSWORD_SECRET}:latest,VIL_PAYMENTS_WEBHOOK_SECRET_PATH=${_PAYMENTS_WEBHOOK_SECRET}:latest,VIL_PAYMENTS_INTERNAL_VERIFY_AUTH_TOKEN=${_PAYMENTS_INTERNAL_VERIFY_AUTH_TOKEN_SECRET}:latest,VIL_PAYMENTS_INFINITEPAY_API_TOKEN=${_PAYMENTS_INFINITEPAY_API_TOKEN_SECRET}:latest,VIL_PAYMENTS_WEBHOOK_URL=${_PAYMENTS_WEBHOOK_URL_SECRET}:latest
 
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
@@ -84,7 +93,7 @@ steps:
           --max-instances 1 \
           --timeout 300 \
           --service-account ${_WORKER_SERVICE_ACCOUNT} \
-          --env-vars-file .env.production \
+          --env-vars-file deploy/env/cloudrun.production.yaml \
           --set-secrets VIL_MONGODB_URI=${_MONGODB_URI_SECRET}:latest,VIL_REDIS_PASSWORD=${_REDIS_PASSWORD_SECRET}:latest
 
 images:

@@ -51,6 +51,9 @@ func main() {
 	if cfg.Payments.InfinitePay.BaseURL == "" {
 		log.Fatal("payments.infinitepay.base_url is required")
 	}
+	if cfg.Payments.InfinitePay.Handle == "" {
+		log.Fatal("payments.infinitepay.handle is required")
+	}
 	if cfg.Redis.Addr == "" {
 		log.Fatal("redis.addr is required")
 	}
@@ -82,7 +85,6 @@ func main() {
 	checkoutStore := checkout.NewRedisStore(redisClient)
 	storeAdapter := payments.NewCheckoutStoreAdapter(checkoutStore)
 
-	planRepo := payments.NewMongoPlanRepository(mongoClient, cfg.MongoDB)
 	versionedPlanRepo := commercialplans.NewMongoRepository(mongoClient, cfg.MongoDB)
 	organizationRepo := organizations.NewMongoRepository(mongoClient, cfg.MongoDB)
 	tenantRepo := tenants.NewMongoRepository(mongoClient, cfg.MongoDB)
@@ -101,9 +103,9 @@ func main() {
 	)
 
 	// --- Services ---
-	checkoutSvc := payments.NewCheckoutService(planRepo, versionedPlanRepo, organizationRepo, tenantRepo, orderRepo, checkoutIdempotencyRepo, infinitePayClient, storeAdapter, storeAdapter, cfg.Payments, log)
+	checkoutSvc := payments.NewCheckoutService(versionedPlanRepo, organizationRepo, tenantRepo, orderRepo, checkoutIdempotencyRepo, infinitePayClient, storeAdapter, storeAdapter, cfg.Payments, log)
 	statusSvc := payments.NewOrderStatusService(orderRepo, subRepo, storeAdapter, log)
-	planSvc := payments.NewPlanQueryService(planRepo, versionedPlanRepo, organizationRepo, tenantRepo, log)
+	planSvc := payments.NewPlanQueryService(versionedPlanRepo, organizationRepo, tenantRepo, log)
 	webhookSvc := payments.NewWebhookService(orderRepo, paymentRepo, subRepo, webhookRepo, outboxRepo, storeAdapter, storeAdapter, storeAdapter, infinitePayClient, log)
 
 	handler := payments.NewHandler(checkoutSvc, statusSvc, planSvc, webhookSvc, log)

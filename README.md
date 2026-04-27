@@ -5,8 +5,9 @@ Backend core for digital products delivered across WEB, MOBILE, IOT, and partner
 ## Quick Start
 
 ```bash
-# Copy sample config (optional — defaults apply without a file)
-cp configs/config.example.yaml config.yaml
+# Set up local environment (required — contains secrets, never committed)
+cp configs/local-development.example .env.local
+# edit .env.local and fill in the REPLACE_ME placeholders
 
 # Run locally
 make run
@@ -61,7 +62,7 @@ See [docs/ai/agent-orchestration.md](docs/ai/agent-orchestration.md).
 
 ## Cloud Run Bootstrap
 
-Environment-specific Cloud Run deploy inputs live in [.env.development](.env.development) and [.env.production](.env.production).
+Non-sensitive Cloud Run deploy inputs live in [deploy/env/cloudrun.development.yaml](deploy/env/cloudrun.development.yaml) and [deploy/env/cloudrun.production.yaml](deploy/env/cloudrun.production.yaml).
 
 Cloud Build pipelines live in [cloudbuild.development.yaml](cloudbuild.development.yaml) and [cloudbuild.yaml](cloudbuild.yaml).
 

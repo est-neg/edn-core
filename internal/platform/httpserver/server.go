@@ -33,12 +33,6 @@ func New(cfg config.HTTPConfig, log *zap.Logger, register ...func(chi.Router)) *
 		fn(r)
 	}
 
-	// Versioned API prefix — extend per feature module
-	r.Route("/api/v1", func(r chi.Router) {
-		// Feature routes will be registered here as modules are added:
-		// r.Mount("/users", users.Router(deps))
-	})
-
 	return &http.Server{
 		Addr:         cfg.Addr,
 		Handler:      r,

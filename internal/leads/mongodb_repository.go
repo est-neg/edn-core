@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -26,22 +25,16 @@ func (r *mongoRepository) Save(ctx context.Context, lead Lead) error {
 	doc := bson.D{
 		{Key: "id", Value: lead.ID},
 		{Key: "dedup_key", Value: lead.DedupKey},
+		{Key: "tenant_id", Value: lead.TenantID},
 		{Key: "source", Value: lead.Source},
-		{Key: "submitted_at", Value: lead.SubmittedAt},
 		{Key: "received_at", Value: lead.ReceivedAt},
 		{Key: "name", Value: lead.Name},
-		{Key: "business_name", Value: lead.BusinessName},
-		{Key: "whatsapp", Value: lead.WhatsApp},
-		{Key: "profile", Value: lead.Profile},
-		{Key: "consent", Value: lead.Consent},
+		{Key: "email", Value: lead.Email},
 		{Key: "status", Value: lead.Status},
 		{Key: "notification_status", Value: lead.NotificationStatus},
 	}
-	if lead.Email != "" {
-		doc = append(doc, bson.E{Key: "email", Value: lead.Email})
-	}
-	if lead.Message != "" {
-		doc = append(doc, bson.E{Key: "message", Value: lead.Message})
+	if lead.Phone != "" {
+		doc = append(doc, bson.E{Key: "phone", Value: lead.Phone})
 	}
 	if lead.NotificationError != "" {
 		doc = append(doc, bson.E{Key: "notification_error", Value: lead.NotificationError})
@@ -57,16 +50,18 @@ func (r *mongoRepository) Save(ctx context.Context, lead Lead) error {
 	return nil
 }
 
-func (r *mongoRepository) ExistsByWhatsAppAndProfile(ctx context.Context, whatsapp, profile string, since time.Time) (bool, error) {
-	filter := bson.D{
-		{Key: "whatsapp", Value: whatsapp},
-		{Key: "profile", Value: profile},
-		{Key: "received_at", Value: bson.D{{Key: "$gte", Value: since}}},
-	}
-
-	count, err := r.coll.CountDocuments(ctx, filter)
+func (r *mongoRepository) ExistsByEmail(ctx context.Context, email string) (bool, error) {
+	count, err := r.coll.CountDocuments(ctx, bson.D{{Key: "email", Value: email}})
 	if err != nil {
-		return false, fmt.Errorf("count leads: %w", err)
+		return false, fmt.Errorf("count leads by email: %w", err)
+	}
+	return count > 0, nil
+}
+
+func (r *mongoRepository) ExistsByPhone(ctx context.Context, phone string) (bool, error) {
+	count, err := r.coll.CountDocuments(ctx, bson.D{{Key: "phone", Value: phone}})
+	if err != nil {
+		return false, fmt.Errorf("count leads by phone: %w", err)
 	}
 	return count > 0, nil
 }

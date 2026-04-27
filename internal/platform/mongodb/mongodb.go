@@ -62,6 +62,15 @@ func BootstrapLeadsStorage(ctx context.Context, client *mongo.Client, cfg config
 func EnsureLeadsIndexes(ctx context.Context, client *mongo.Client, cfg config.MongoConfig) error {
 	coll := client.Database(cfg.Database).Collection(cfg.CollectionLeads)
 
+	// Drop idx_dedup if it exists with a stale key set (e.g. from a previous schema).
+	// DropOne ignores "index not found" so this is safe on a fresh database.
+	if _, err := coll.Indexes().DropOne(ctx, "idx_dedup"); err != nil {
+		var cmdErr mongo.CommandError
+		if !errors.As(err, &cmdErr) || (cmdErr.Code != 27 && cmdErr.Name != "IndexNotFound") {
+			return fmt.Errorf("drop stale idx_dedup: %w", err)
+		}
+	}
+
 	indexes := []mongo.IndexModel{
 		{
 			Keys:    bson.D{{Key: "id", Value: 1}},
@@ -72,12 +81,12 @@ func EnsureLeadsIndexes(ctx context.Context, client *mongo.Client, cfg config.Mo
 			Options: options.Index().SetUnique(true).SetName("idx_dedup_key_unique"),
 		},
 		{
-			Keys: bson.D{
-				{Key: "whatsapp", Value: 1},
-				{Key: "profile", Value: 1},
-				{Key: "received_at", Value: -1},
-			},
-			Options: options.Index().SetName("idx_dedup"),
+			Keys:    bson.D{{Key: "email", Value: 1}},
+			Options: options.Index().SetUnique(true).SetName("idx_email_unique"),
+		},
+		{
+			Keys:    bson.D{{Key: "phone", Value: 1}},
+			Options: options.Index().SetUnique(true).SetSparse(true).SetName("idx_phone_unique"),
 		},
 		{
 			Keys: bson.D{

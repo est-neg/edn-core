@@ -7,22 +7,6 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
-// Plan represents a pricing plan document stored in the plans collection.
-type Plan struct {
-	ID              primitive.ObjectID     `bson:"_id,omitempty"`
-	PlanID          string                 `bson:"id"`
-	Slug            string                 `bson:"slug"`
-	Name            string                 `bson:"name"`
-	BillingCycle    string                 `bson:"billing_cycle"` // monthly | annual
-	PriceCents      int64                  `bson:"price_cents"`
-	Currency        string                 `bson:"currency"`
-	Active          bool                   `bson:"active"`
-	MaxInstallments int                    `bson:"max_installments"`
-	Metadata        map[string]interface{} `bson:"metadata,omitempty"`
-	CreatedAt       time.Time              `bson:"created_at"`
-	UpdatedAt       time.Time              `bson:"updated_at"`
-}
-
 // Order represents a checkout order document stored in the orders collection.
 type Order struct {
 	ID                  primitive.ObjectID `bson:"_id,omitempty"`

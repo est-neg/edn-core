@@ -17,12 +17,9 @@ import (
 )
 
 const (
-	legacyCheckoutOrganizationID = "legacy-public"
-	legacyCheckoutTenantID       = "legacy-public"
-	checkoutCreateOperation      = "checkout.create"
-	checkoutResourceTypeOrder    = "order"
-	legacyPlanSource             = "legacy"
-	versionedPlanSource          = "versioned"
+	checkoutCreateOperation   = "checkout.create"
+	checkoutResourceTypeOrder = "order"
+	versionedPlanSource       = "versioned"
 )
 
 type resolvedTenantScope struct {
@@ -31,7 +28,6 @@ type resolvedTenantScope struct {
 	organization   string
 	tenant         string
 	channel        string
-	tenantAware    bool
 }
 
 type resolvedCheckoutPlan struct {
@@ -48,7 +44,6 @@ type resolvedCheckoutPlan struct {
 
 // CheckoutService handles plan lookup, order creation, and InfinitePay checkout creation.
 type CheckoutService struct {
-	legacyPlans    PlanRepository
 	versionedPlans VersionedPlanRepository
 	organizations  OrganizationRepository
 	tenants        TenantRepository
@@ -63,7 +58,6 @@ type CheckoutService struct {
 
 // NewCheckoutService constructs a CheckoutService with all required dependencies injected.
 func NewCheckoutService(
-	legacyPlans PlanRepository,
 	versionedPlans VersionedPlanRepository,
 	organizations OrganizationRepository,
 	tenants TenantRepository,
@@ -76,7 +70,6 @@ func NewCheckoutService(
 	log *zap.Logger,
 ) *CheckoutService {
 	return &CheckoutService{
-		legacyPlans:    legacyPlans,
 		versionedPlans: versionedPlans,
 		organizations:  organizations,
 		tenants:        tenants,
@@ -162,6 +155,7 @@ func (s *CheckoutService) CreateSession(ctx context.Context, req CreateCheckoutR
 	defer s.lock.ReleaseOrderLock(ctx, orderNSU, lockToken) //nolint:errcheck
 
 	providerReq := InfinitePayCheckoutRequest{
+		Handle:           s.cfg.InfinitePay.Handle,
 		OrderNSU:         orderNSU,
 		PlanName:         plan.name,
 		AmountCents:      plan.priceCents,
@@ -365,16 +359,14 @@ func createCheckoutResponseFromRecord(record *idempotency.Key, createdAt time.Ti
 
 // PlanQueryService handles GET /v1/plans.
 type PlanQueryService struct {
-	legacyPlans    PlanRepository
 	versionedPlans VersionedPlanRepository
 	organizations  OrganizationRepository
 	tenants        TenantRepository
 	log            *zap.Logger
 }
 
-func NewPlanQueryService(legacyPlans PlanRepository, versionedPlans VersionedPlanRepository, organizations OrganizationRepository, tenants TenantRepository, log *zap.Logger) *PlanQueryService {
+func NewPlanQueryService(versionedPlans VersionedPlanRepository, organizations OrganizationRepository, tenants TenantRepository, log *zap.Logger) *PlanQueryService {
 	return &PlanQueryService{
-		legacyPlans:    legacyPlans,
 		versionedPlans: versionedPlans,
 		organizations:  organizations,
 		tenants:        tenants,
@@ -386,23 +378,6 @@ func (s *PlanQueryService) ListActivePlans(ctx context.Context, query PlanListQu
 	scope, err := resolveTenantScope(ctx, s.organizations, s.tenants, query.OrganizationSlug, query.TenantSlug, query.Channel)
 	if err != nil {
 		return nil, err
-	}
-	if !scope.tenantAware {
-		plans, err := s.legacyPlans.ListActive(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("list active plans: %w", err)
-		}
-		resp := make([]PlanResponse, 0, len(plans))
-		for _, p := range plans {
-			resp = append(resp, PlanResponse{
-				Slug:         p.Slug,
-				Name:         p.Name,
-				BillingCycle: p.BillingCycle,
-				PriceCents:   p.PriceCents,
-				Currency:     p.Currency,
-			})
-		}
-		return resp, nil
 	}
 
 	plans, err := s.versionedPlans.ListActiveByTenant(ctx, scope.tenantID, scope.channel)
@@ -450,23 +425,6 @@ func (s *OrderStatusService) GetStatus(ctx context.Context, orderNSU string) (Or
 }
 
 func (s *CheckoutService) resolveCheckoutPlan(ctx context.Context, scope resolvedTenantScope, planSlug, billingCycle string, now time.Time) (resolvedCheckoutPlan, error) {
-	if !scope.tenantAware {
-		plan, err := s.legacyPlans.FindActiveBySlugAndCycle(ctx, planSlug, billingCycle)
-		if err != nil {
-			return resolvedCheckoutPlan{}, ErrPlanNotFound
-		}
-		return resolvedCheckoutPlan{
-			planID:          plan.PlanID,
-			planSource:      legacyPlanSource,
-			name:            plan.Name,
-			slug:            plan.Slug,
-			billingCycle:    plan.BillingCycle,
-			priceCents:      plan.PriceCents,
-			currency:        plan.Currency,
-			maxInstallments: plan.MaxInstallments,
-		}, nil
-	}
-
 	plan, err := s.versionedPlans.FindSellableByTenantSlug(ctx, scope.tenantID, planSlug, billingCycle, scope.channel, now)
 	if err != nil {
 		return resolvedCheckoutPlan{}, ErrPlanNotFound
@@ -494,13 +452,6 @@ func resolveTenantScope(ctx context.Context, organizations OrganizationRepositor
 	}
 	organizationSlug = strings.ToLower(strings.TrimSpace(organizationSlug))
 	tenantSlug = strings.ToLower(strings.TrimSpace(tenantSlug))
-	if organizationSlug == "" && tenantSlug == "" {
-		return resolvedTenantScope{
-			organizationID: legacyCheckoutOrganizationID,
-			tenantID:       legacyCheckoutTenantID,
-			channel:        normalizedChannel,
-		}, nil
-	}
 
 	org, err := organizations.FindBySlug(ctx, organizationSlug)
 	if err != nil || org == nil || !org.Active {
@@ -516,7 +467,6 @@ func resolveTenantScope(ctx context.Context, organizations OrganizationRepositor
 		organization:   org.Slug,
 		tenant:         tenant.Slug,
 		channel:        normalizedChannel,
-		tenantAware:    true,
 	}, nil
 }
 

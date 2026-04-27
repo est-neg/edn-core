@@ -13,4 +13,8 @@ type Repository interface {
 	FindByOrgAndSlug(ctx context.Context, organizationID, slug string) (*Tenant, error)
 	// ListByOrg returns all tenants belonging to an organization.
 	ListByOrg(ctx context.Context, organizationID string) ([]Tenant, error)
+	// Update replaces mutable fields of an existing tenant.
+	Update(ctx context.Context, tenantUUID string, tenant Tenant) error
+	// Deactivate sets active=false on the tenant.
+	Deactivate(ctx context.Context, tenantUUID string) error
 }

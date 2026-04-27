@@ -6,15 +6,16 @@
 //	    catalog   Portal RH Básico       (item_uuid: seed-item-fun-onl-portal-001)
 //	    catalog   Suporte Dedicado       (item_uuid: seed-item-fun-onl-suporte-001)
 //	    package   Plano Essencial        (package_uuid: seed-pkg-fun-onl-essencial-v1)
-//	    plan      Essencial Mensal       (monthly, R$ 99,00)
-//	    plan      Essencial Anual        (annual,  R$ 990,00, up to 12x)
+//	    plan      Essencial Mensal       (monthly,  R$ 99,00)
+//	    plan      Essencial Anual        (annual,   R$ 990,00, up to 12x)
+//	    plan      Teste Mensal R$ 1,00    (monthly,  R$ 1,00   — InfinitePay integration test)
 //
 // All writes use ReplaceOne + upsert=true filtered on natural keys, so the
 // command is safe to run multiple times without creating duplicates.
 //
 // Usage:
 //
-//	# via tasks.ps1 (loads .env.development automatically)
+//	# via tasks.ps1 (loads .env.local automatically)
 //	.\tasks.ps1 seed-dev
 //
 //	# directly (requires VIL_MONGODB_URI in environment)

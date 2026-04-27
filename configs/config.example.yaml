@@ -51,9 +51,11 @@ payments:
   request_body_max_bytes: 65536
   outbox_dispatch_interval_sec: 30
   infinitepay:
-    base_url: "https://api.infinitepay.io"
+    base_url: "https://api.checkout.infinitepay.io"
     # api_token loaded from VIL_PAYMENTS_INFINITEPAY_API_TOKEN env var — never commit here.
     api_token: ""
+    # handle is the InfinitePay link handle registered for this merchant account.
+    handle: ""
 
 pubsub:
   # project_id is the GCP project ID for Pub/Sub.

@@ -121,6 +121,7 @@ type PaymentApprovedEvent struct {
 
 // InfinitePayCheckoutRequest is the payload sent to InfinitePay's checkout API.
 type InfinitePayCheckoutRequest struct {
+	Handle           string `json:"handle"`
 	OrderNSU         string `json:"order_nsu"`
 	PlanName         string `json:"plan_name"`
 	AmountCents      int64  `json:"amount_cents"`

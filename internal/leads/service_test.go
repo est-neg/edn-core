@@ -15,11 +15,13 @@ import (
 // --- fakes ---
 
 type fakeRepo struct {
-	saved     []leads.Lead
-	saveErr   error
-	exists    bool
-	existsErr error
-	updates   []notificationUpdate
+	saved          []leads.Lead
+	saveErr        error
+	exists         bool
+	existsErr      error
+	phoneExists    bool
+	phoneExistsErr error
+	updates        []notificationUpdate
 }
 
 type notificationUpdate struct {
@@ -36,8 +38,12 @@ func (r *fakeRepo) Save(_ context.Context, lead leads.Lead) error {
 	return nil
 }
 
-func (r *fakeRepo) ExistsByWhatsAppAndProfile(_ context.Context, _, _ string, _ time.Time) (bool, error) {
+func (r *fakeRepo) ExistsByEmail(_ context.Context, _ string) (bool, error) {
 	return r.exists, r.existsErr
+}
+
+func (r *fakeRepo) ExistsByPhone(_ context.Context, _ string) (bool, error) {
+	return r.phoneExists, r.phoneExistsErr
 }
 
 func (r *fakeRepo) UpdateNotificationStatus(_ context.Context, leadID, status, detail string) error {
@@ -47,23 +53,15 @@ func (r *fakeRepo) UpdateNotificationStatus(_ context.Context, leadID, status, d
 
 func newService(t *testing.T, repo leads.Repository) *leads.Service {
 	t.Helper()
-	cfg := config.LeadsConfig{
-		DedupWindowSec: 300,
-	}
-	return leads.NewService(repo, leads.NoopNotifier{}, cfg, zap.NewNop())
+	return leads.NewService(repo, leads.NoopNotifier{}, config.LeadsConfig{}, zap.NewNop())
 }
 
 func validRequest() leads.SubmitRequest {
 	return leads.SubmitRequest{
-		Source:      "lumina-ia-site",
-		SubmittedAt: time.Now().UTC().Format(time.RFC3339),
-		Lead: leads.LeadPayload{
-			Name:         "Maria Lima",
-			BusinessName: "Studio Dental",
-			WhatsApp:     "11988887777",
-			Profile:      "dental",
-			Consent:      true,
-		},
+		Name:   "Maria Lima",
+		Email:  "maria@example.com",
+		Phone:  "+5511988887777",
+		Source: "test",
 	}
 }
 
@@ -98,8 +96,18 @@ func TestService_Submit_Success(t *testing.T) {
 	}
 }
 
-func TestService_Submit_DuplicateReturnsError(t *testing.T) {
+func TestService_Submit_DuplicateEmailReturnsError(t *testing.T) {
 	repo := &fakeRepo{exists: true}
+	svc := newService(t, repo)
+
+	err := svc.Submit(context.Background(), validRequest())
+	if !errors.Is(err, leads.ErrDuplicateLead) {
+		t.Errorf("expected ErrDuplicateLead, got %v", err)
+	}
+}
+
+func TestService_Submit_DuplicatePhoneReturnsError(t *testing.T) {
+	repo := &fakeRepo{phoneExists: true}
 	svc := newService(t, repo)
 
 	err := svc.Submit(context.Background(), validRequest())

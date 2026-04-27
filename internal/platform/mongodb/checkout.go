@@ -17,7 +17,6 @@ func BootstrapCheckoutStorage(ctx context.Context, client *mongo.Client, cfg con
 	db := client.Database(cfg.Database)
 
 	collections := []string{
-		cfg.CollectionPlans,
 		cfg.CollectionOrders,
 		cfg.CollectionPayments,
 		cfg.CollectionSubscriptions,
@@ -38,9 +37,6 @@ func BootstrapCheckoutStorage(ctx context.Context, client *mongo.Client, cfg con
 func EnsureCheckoutIndexes(ctx context.Context, client *mongo.Client, cfg config.MongoConfig) error {
 	db := client.Database(cfg.Database)
 
-	if err := ensurePlansIndexes(ctx, db.Collection(cfg.CollectionPlans)); err != nil {
-		return err
-	}
 	if err := ensureOrdersIndexes(ctx, db.Collection(cfg.CollectionOrders)); err != nil {
 		return err
 	}
@@ -55,23 +51,6 @@ func EnsureCheckoutIndexes(ctx context.Context, client *mongo.Client, cfg config
 	}
 	if err := ensureOutboxEventsIndexes(ctx, db.Collection(cfg.CollectionOutboxEvents)); err != nil {
 		return err
-	}
-	return nil
-}
-
-func ensurePlansIndexes(ctx context.Context, coll *mongo.Collection) error {
-	indexes := []mongo.IndexModel{
-		{
-			// Compound unique: a plan variant is uniquely identified by slug + billing cycle.
-			Keys: bson.D{
-				{Key: "slug", Value: 1},
-				{Key: "billing_cycle", Value: 1},
-			},
-			Options: options.Index().SetUnique(true).SetName("idx_plans_slug_cycle_unique"),
-		},
-	}
-	if _, err := coll.Indexes().CreateMany(ctx, indexes); err != nil {
-		return fmt.Errorf("ensure plans indexes: %w", err)
 	}
 	return nil
 }

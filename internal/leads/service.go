@@ -41,14 +41,8 @@ func NewService(repo Repository, notifier Notifier, cfg config.LeadsConfig, log 
 func (s *Service) Submit(ctx context.Context, req SubmitRequest) error {
 	receivedAt := time.Now().UTC()
 
-	// Deduplication: reject same whatsapp+profile within the configured window.
-	window := time.Duration(s.cfg.DedupWindowSec) * time.Second
-	if window == 0 {
-		window = 5 * time.Minute
-	}
-	since := receivedAt.Add(-window)
-
-	exists, err := s.repo.ExistsByWhatsAppAndProfile(ctx, req.Lead.WhatsApp, req.Lead.Profile, since)
+	// Deduplication: email is permanently unique across all leads.
+	exists, err := s.repo.ExistsByEmail(ctx, req.Email)
 	if err != nil {
 		return fmt.Errorf("dedup check: %w", err)
 	}
@@ -56,24 +50,26 @@ func (s *Service) Submit(ctx context.Context, req SubmitRequest) error {
 		return ErrDuplicateLead
 	}
 
-	submittedAt, err := time.Parse(time.RFC3339, req.SubmittedAt)
-	if err != nil {
-		return &ValidationError{Details: "submittedAt must be a valid RFC3339 timestamp"}
+	// Phone uniqueness: reject if another lead already has this number.
+	if req.Phone != "" {
+		phoneExists, err := s.repo.ExistsByPhone(ctx, req.Phone)
+		if err != nil {
+			return fmt.Errorf("phone dedup check: %w", err)
+		}
+		if phoneExists {
+			return ErrDuplicateLead
+		}
 	}
 
 	lead := Lead{
 		ID:                 uuid.New().String(),
-		DedupKey:           buildDedupKey(req.Lead.WhatsApp, req.Lead.Profile, receivedAt, window),
+		DedupKey:           req.Email,
+		TenantID:           s.cfg.TenantID,
 		Source:             req.Source,
-		SubmittedAt:        submittedAt.UTC(),
 		ReceivedAt:         receivedAt,
-		Name:               req.Lead.Name,
-		BusinessName:       req.Lead.BusinessName,
-		WhatsApp:           req.Lead.WhatsApp,
-		Email:              req.Lead.Email,
-		Profile:            req.Lead.Profile,
-		Message:            req.Lead.Message,
-		Consent:            req.Lead.Consent,
+		Name:               req.Name,
+		Email:              req.Email,
+		Phone:              req.Phone,
 		Status:             "new",
 		NotificationStatus: s.initialNotificationStatus(),
 	}
@@ -88,7 +84,7 @@ func (s *Service) Submit(ctx context.Context, req SubmitRequest) error {
 	s.log.Info("lead submitted",
 		zap.String("lead_id", lead.ID),
 		zap.String("source", lead.Source),
-		zap.String("profile", lead.Profile),
+		zap.String("email", lead.Email),
 	)
 
 	if !s.enabled {
@@ -139,13 +135,4 @@ func (s *Service) notifyLead(lead Lead) {
 			zap.Error(err),
 		)
 	}
-}
-
-func buildDedupKey(whatsApp, profile string, receivedAt time.Time, window time.Duration) string {
-	bucketSeconds := int64(window / time.Second)
-	if bucketSeconds <= 0 {
-		bucketSeconds = int64((5 * time.Minute) / time.Second)
-	}
-	bucket := receivedAt.Unix() / bucketSeconds
-	return fmt.Sprintf("%s:%s:%d", whatsApp, profile, bucket)
 }

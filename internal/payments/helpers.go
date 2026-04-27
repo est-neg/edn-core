@@ -150,16 +150,12 @@ func ValidateCreateCheckoutRequest(req CreateCheckoutRequest) error {
 	return nil
 }
 
-// ValidateTenantScope enforces that public commercial scope is either fully absent
-// (legacy mode) or fully specified with organization and tenant slugs.
+// ValidateTenantScope enforces that organization_slug and tenant_slug are both provided.
 func ValidateTenantScope(organizationSlug, tenantSlug string) error {
 	org := strings.TrimSpace(strings.ToLower(organizationSlug))
 	tenant := strings.TrimSpace(strings.ToLower(tenantSlug))
-	if org == "" && tenant == "" {
-		return nil
-	}
 	if org == "" || tenant == "" {
-		return fmt.Errorf("%w: organization_slug and tenant_slug must be provided together", ErrInvalidRequest)
+		return fmt.Errorf("%w: organization_slug and tenant_slug are required", ErrInvalidRequest)
 	}
 	if !rePlanSlug.MatchString(org) {
 		return fmt.Errorf("%w: invalid organization_slug", ErrInvalidRequest)

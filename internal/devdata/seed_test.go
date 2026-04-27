@@ -95,8 +95,8 @@ func TestPackage_ItemsMatchCatalog(t *testing.T) {
 
 func TestPlans_ReferencePackageAndBothCycles(t *testing.T) {
 	plns := devdata.Plans(time.Now())
-	if len(plns) != 2 {
-		t.Fatalf("want 2 plans, got %d", len(plns))
+	if len(plns) != 3 {
+		t.Fatalf("want 3 plans, got %d", len(plns))
 	}
 
 	cycles := map[string]bool{}
@@ -136,26 +136,66 @@ func TestPlans_ReferencePackageAndBothCycles(t *testing.T) {
 func TestSeedUUIDs_AreStable(t *testing.T) {
 	// Ensures the constants that serve as upsert keys never accidentally change.
 	want := map[string]string{
-		"OrgUUID":         "seed-org-edn-core-001",
-		"TenantUUID":      "seed-ten-fun-onl-001",
-		"ItemUUIDPortal":  "seed-item-fun-onl-portal-001",
-		"ItemUUIDSupport": "seed-item-fun-onl-suporte-001",
-		"PackageUUID":     "seed-pkg-fun-onl-essencial-v1",
-		"PlanUUIDMonthly": "seed-plan-fun-onl-essencial-mensal-v1",
-		"PlanUUIDAnnual":  "seed-plan-fun-onl-essencial-anual-v1",
+		"OrgUUID":             "seed-org-edn-core-001",
+		"TenantUUID":          "seed-ten-fun-onl-001",
+		"ItemUUIDPortal":      "seed-item-fun-onl-portal-001",
+		"ItemUUIDSupport":     "seed-item-fun-onl-suporte-001",
+		"PackageUUID":         "seed-pkg-fun-onl-essencial-v1",
+		"PlanUUIDMonthly":     "seed-plan-fun-onl-essencial-mensal-v1",
+		"PlanUUIDAnnual":      "seed-plan-fun-onl-essencial-anual-v1",
+		"PlanUUIDTestOneReal": "seed-plan-fun-onl-teste-1real-v1",
 	}
 	got := map[string]string{
-		"OrgUUID":         devdata.OrgUUID,
-		"TenantUUID":      devdata.TenantUUID,
-		"ItemUUIDPortal":  devdata.ItemUUIDPortal,
-		"ItemUUIDSupport": devdata.ItemUUIDSupport,
-		"PackageUUID":     devdata.PackageUUID,
-		"PlanUUIDMonthly": devdata.PlanUUIDMonthly,
-		"PlanUUIDAnnual":  devdata.PlanUUIDAnnual,
+		"OrgUUID":             devdata.OrgUUID,
+		"TenantUUID":          devdata.TenantUUID,
+		"ItemUUIDPortal":      devdata.ItemUUIDPortal,
+		"ItemUUIDSupport":     devdata.ItemUUIDSupport,
+		"PackageUUID":         devdata.PackageUUID,
+		"PlanUUIDMonthly":     devdata.PlanUUIDMonthly,
+		"PlanUUIDAnnual":      devdata.PlanUUIDAnnual,
+		"PlanUUIDTestOneReal": devdata.PlanUUIDTestOneReal,
 	}
 	for name, wantVal := range want {
 		if got[name] != wantVal {
 			t.Errorf("%s = %q, want %q", name, got[name], wantVal)
 		}
+	}
+}
+
+func TestPlanTestOneReal_Fields(t *testing.T) {
+	var testPlan *struct {
+		PlanUUID     string
+		Slug         string
+		BillingCycle string
+		PriceCents   int64
+		Currency     string
+	}
+	for _, p := range devdata.Plans(time.Now()) {
+		p := p
+		if p.PlanUUID == devdata.PlanUUIDTestOneReal {
+			testPlan = &struct {
+				PlanUUID     string
+				Slug         string
+				BillingCycle string
+				PriceCents   int64
+				Currency     string
+			}{p.PlanUUID, p.Slug, p.BillingCycle, p.PriceCents, p.Currency}
+			break
+		}
+	}
+	if testPlan == nil {
+		t.Fatal("PlanUUIDTestOneReal not found in Plans()")
+	}
+	if testPlan.Slug != "teste-mensal-1real-v1" {
+		t.Errorf("Slug = %q, want teste-mensal-1real-v1", testPlan.Slug)
+	}
+	if testPlan.BillingCycle != "monthly" {
+		t.Errorf("BillingCycle = %q, want monthly", testPlan.BillingCycle)
+	}
+	if testPlan.PriceCents != 100 {
+		t.Errorf("PriceCents = %d, want 100 (R$ 1,00)", testPlan.PriceCents)
+	}
+	if testPlan.Currency != "BRL" {
+		t.Errorf("Currency = %q, want BRL", testPlan.Currency)
 	}
 }

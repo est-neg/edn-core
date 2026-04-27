@@ -15,13 +15,14 @@ import (
 
 // Stable natural-key identifiers — never change these; they are the upsert filters.
 const (
-	OrgUUID         = "seed-org-edn-core-001"
-	TenantUUID      = "seed-ten-fun-onl-001"
-	ItemUUIDPortal  = "seed-item-fun-onl-portal-001"
-	ItemUUIDSupport = "seed-item-fun-onl-suporte-001"
-	PackageUUID     = "seed-pkg-fun-onl-essencial-v1"
-	PlanUUIDMonthly = "seed-plan-fun-onl-essencial-mensal-v1"
-	PlanUUIDAnnual  = "seed-plan-fun-onl-essencial-anual-v1"
+	OrgUUID             = "seed-org-edn-core-001"
+	TenantUUID          = "seed-ten-fun-onl-001"
+	ItemUUIDPortal      = "seed-item-fun-onl-portal-001"
+	ItemUUIDSupport     = "seed-item-fun-onl-suporte-001"
+	PackageUUID         = "seed-pkg-fun-onl-essencial-v1"
+	PlanUUIDMonthly     = "seed-plan-fun-onl-essencial-mensal-v1"
+	PlanUUIDAnnual      = "seed-plan-fun-onl-essencial-anual-v1"
+	PlanUUIDTestOneReal = "seed-plan-fun-onl-teste-1real-v1" // R$ 1,00 — InfinitePay integration test only
 )
 
 // Organization returns the seed organization document.
@@ -30,10 +31,23 @@ func Organization(now time.Time) organizations.Organization {
 		OrgUUID:      OrgUUID,
 		Slug:         "edn-core",
 		Name:         "Estaleiro de Negocios",
-		BillingEmail: "financeiro@edn-core.com.br",
-		Active:       true,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		LegalName:    "ESTALEIRO DE NEGOCIOS LTDA",
+		CNPJ:         "62.124.197/0001-28",
+		BillingEmail: "gillylopes@gmail.com",
+		Phone:        "(69) 9206-0958",
+		Address: organizations.Address{
+			Street:     "R ANTONIO SAAD",
+			Number:     "2500",
+			Complement: "COND TERRA NOVA CASA 395",
+			District:   "BOA VISTA",
+			City:       "PONTA GROSSA",
+			State:      "PR",
+			PostalCode: "84073-170",
+			Country:    "BR",
+		},
+		Active:    true,
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 }
 
@@ -118,7 +132,9 @@ func Package(now time.Time) packages.Package {
 	}
 }
 
-// Plans returns the monthly and annual seed plans pointing to the seed package.
+// Plans returns the seed plans pointing to the seed package.
+// The slice includes the two commercial plans (monthly/annual) plus a
+// R$ 1,00 monthly plan used exclusively for InfinitePay integration tests.
 func Plans(now time.Time) []plans.Plan {
 	pkgRef := plans.PackageRef{PackageUUID: PackageUUID, Version: 1}
 	pkgSnap := plans.PackageSnapshot{
@@ -160,6 +176,25 @@ func Plans(now time.Time) []plans.Plan {
 			PriceCents:      99000, // R$ 990,00 (~R$ 82,50/mês)
 			Currency:        "BRL",
 			MaxInstallments: 12,
+			Channel:         plans.ChannelAll,
+			Active:          true,
+			ValidFrom:       now,
+			CreatedAt:       now,
+			UpdatedAt:       now,
+		},
+		{
+			PlanUUID:        PlanUUIDTestOneReal,
+			OrganizationID:  OrgUUID,
+			TenantID:        TenantUUID,
+			Slug:            "teste-mensal-1real-v1",
+			Version:         1,
+			Name:            "Teste Mensal R$ 1,00",
+			PackageRef:      pkgRef,
+			PackageSnapshot: pkgSnap,
+			BillingCycle:    plans.BillingCycleMonthly,
+			PriceCents:      100, // R$ 1,00 — low-value monthly plan for InfinitePay integration tests
+			Currency:        "BRL",
+			MaxInstallments: 1,
 			Channel:         plans.ChannelAll,
 			Active:          true,
 			ValidFrom:       now,

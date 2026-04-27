@@ -11,41 +11,6 @@ import (
 	"github.com/villenneve/vil-core/internal/platform/config"
 )
 
-// planRepo adapts checkout.PlanRepository to payments.PlanRepository.
-type planRepo struct{ inner checkout.PlanRepository }
-
-func NewMongoPlanRepository(client *mongo.Client, cfg config.MongoConfig) PlanRepository {
-	return &planRepo{inner: checkout.NewMongoPlanRepository(client, cfg)}
-}
-
-func (r *planRepo) FindActiveBySlugAndCycle(ctx context.Context, slug, billingCycle string) (*checkout.Plan, error) {
-	if billingCycle == "" {
-		// Activation path: find by slug only — pick first active
-		plans, err := r.inner.ListActive(ctx)
-		if err != nil {
-			return nil, err
-		}
-		for i := range plans {
-			if plans[i].Slug == slug {
-				return &plans[i], nil
-			}
-		}
-		return nil, ErrPlanNotFound
-	}
-	p, err := r.inner.FindBySlugAndCycle(ctx, slug, billingCycle)
-	if err != nil {
-		return nil, ErrPlanNotFound
-	}
-	if !p.Active {
-		return nil, ErrPlanInactive
-	}
-	return p, nil
-}
-
-func (r *planRepo) ListActive(ctx context.Context) ([]checkout.Plan, error) {
-	return r.inner.ListActive(ctx)
-}
-
 // orderRepo adapts checkout.OrderRepository to payments.OrderRepository.
 type orderRepo struct{ inner checkout.OrderRepository }
 
