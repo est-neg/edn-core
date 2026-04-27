@@ -83,11 +83,14 @@ type OrderStatusResponse struct {
 
 // PlanResponse is a single plan in GET /v1/plans.
 type PlanResponse struct {
-	Slug         string `json:"slug"`
-	Name         string `json:"name"`
-	BillingCycle string `json:"billing_cycle"`
-	PriceCents   int64  `json:"price_cents"`
-	Currency     string `json:"currency"`
+	ID              string `json:"id"`
+	Slug            string `json:"slug"`
+	Name            string `json:"name"`
+	BillingCycle    string `json:"billing_cycle"`
+	PriceCents      int64  `json:"price_cents"`
+	Currency        string `json:"currency"`
+	Active          bool   `json:"active"`
+	MaxInstallments int    `json:"max_installments"`
 }
 
 // VerifyPaymentRequest is the request body for POST /internal/payments/verify.

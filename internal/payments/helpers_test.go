@@ -136,7 +136,8 @@ func TestNormalizeSalesChannel(t *testing.T) {
 		{"", "web", false},
 		{"WEB", "web", false},
 		{"mobile", "mobile", false},
-		{"partner", "partner", false},
+		{"all", "", true},
+		{"partner", "", true},
 		{"ivr", "", true},
 	}
 	for _, tc := range tests {

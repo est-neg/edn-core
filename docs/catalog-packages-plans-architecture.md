@@ -274,9 +274,11 @@ updated_at
 Indices:
 
 - unique `plan_uuid`
-- unique compound `tenant_id + slug + version`
+- unique compound `tenant_id + slug + billing_cycle + version`
 - compound `tenant_id + channel + active + billing_cycle`
-- partial compound `tenant_id + slug` where `active = true`
+- partial compound `tenant_id + slug + billing_cycle` where `active = true`
+
+> **Nota de migração:** `BootstrapTenancyStorage`/`ensureVersionedPlansIndexes` remove automaticamente o índice legado `idx_versioned_plans_tenant_slug_version_unique` antes de criar os novos índices. Não há etapa manual em staging ou produção.
 
 ### `orders`
 

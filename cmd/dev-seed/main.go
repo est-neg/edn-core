@@ -8,7 +8,16 @@
 //	    package   Plano Essencial        (package_uuid: seed-pkg-fun-onl-essencial-v1)
 //	    plan      Essencial Mensal       (monthly,  R$ 99,00)
 //	    plan      Essencial Anual        (annual,   R$ 990,00, up to 12x)
-//	    plan      Teste Mensal R$ 1,00    (monthly,  R$ 1,00   — InfinitePay integration test)
+//	    plan      Teste Mensal R$ 1,00   (monthly,  R$ 1,00   — InfinitePay / partner only)
+//	    package   Administrativo         (package_uuid: seed-pkg-fun-onl-administrative-v1)
+//	    plan      Administrativo Mensal  (monthly,  R$ 149,00)
+//	    plan      Administrativo Anual   (annual,   R$ 1.430,40, up to 12x, 20% off)
+//	    package   Médico                 (package_uuid: seed-pkg-fun-onl-medical-v1)
+//	    plan      Médico Mensal          (monthly,  R$ 249,00)
+//	    plan      Médico Anual           (annual,   R$ 2.390,40, up to 12x, 20% off)
+//	    package   Odontológico           (package_uuid: seed-pkg-fun-onl-dental-v1)
+//	    plan      Odontológico Mensal    (monthly,  R$ 99,00)
+//	    plan      Odontológico Anual     (annual,   R$ 950,40, up to 12x, 20% off)
 //
 // All writes use ReplaceOne + upsert=true filtered on natural keys, so the
 // command is safe to run multiple times without creating duplicates.
@@ -104,6 +113,16 @@ func seed(ctx context.Context, client *mongo.Client, cfg config.MongoConfig) err
 	}
 	fmt.Printf("  package   %s  (slug: %s, v%d)\n", pkg.Name, pkg.Slug, pkg.Version)
 
+	// Commercial vertical packages
+	for _, cpkg := range devdata.CommercialPackages(now) {
+		cpkg := cpkg
+		if err := upsertDoc(ctx, db.Collection(cfg.CollectionPackages),
+			bson.D{{Key: "package_uuid", Value: cpkg.PackageUUID}}, cpkg); err != nil {
+			return fmt.Errorf("upsert commercial package %s: %w", cpkg.Slug, err)
+		}
+		fmt.Printf("  package   %s  (slug: %s, v%d)\n", cpkg.Name, cpkg.Slug, cpkg.Version)
+	}
+
 	// Plans
 	for _, plan := range devdata.Plans(now) {
 		plan := plan
@@ -113,6 +132,17 @@ func seed(ctx context.Context, client *mongo.Client, cfg config.MongoConfig) err
 		}
 		fmt.Printf("  plan      %s  (slug: %s, cycle: %s, price: %d %s)\n",
 			plan.Name, plan.Slug, plan.BillingCycle, plan.PriceCents, plan.Currency)
+	}
+
+	// Commercial vertical plans
+	for _, cplan := range devdata.CommercialPlans(now) {
+		cplan := cplan
+		if err := upsertDoc(ctx, db.Collection(cfg.CollectionVersionedPlans),
+			bson.D{{Key: "plan_uuid", Value: cplan.PlanUUID}}, cplan); err != nil {
+			return fmt.Errorf("upsert commercial plan %s/%s: %w", cplan.Slug, cplan.BillingCycle, err)
+		}
+		fmt.Printf("  plan      %s  (slug: %s, cycle: %s, price: %d %s)\n",
+			cplan.Name, cplan.Slug, cplan.BillingCycle, cplan.PriceCents, cplan.Currency)
 	}
 
 	return nil

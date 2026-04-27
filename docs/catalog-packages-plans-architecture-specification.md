@@ -486,9 +486,15 @@ updated_at
 Indexes:
 
 - unique `plan_uuid`
-- unique `tenant_id + slug + version`
-- compound `tenant_id + active + channel + billing_cycle`
-- query path for sellable plans by tenant, slug, cycle, and validity window
+- unique `tenant_id + slug + billing_cycle + version`
+- compound `tenant_id + channel + active + billing_cycle`
+- partial `tenant_id + slug + billing_cycle` where `active = true`
+
+Migration note: `BootstrapTenancyStorage` automatically removes the legacy index
+`idx_versioned_plans_tenant_slug_version_unique` (which lacked `billing_cycle`)
+before creating the new indexes. No manual step is required in staging or production.
+
+Commercial plan names and prices still require commercial confirmation before promotion to production.
 
 ### 10.6 `orders`
 

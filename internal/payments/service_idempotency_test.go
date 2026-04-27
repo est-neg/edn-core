@@ -41,6 +41,39 @@ func (r *fakeVersionedPlanRepo) ListActiveByTenant(_ context.Context, tenantID, 
 	return []commercialplans.Plan{*r.plan}, nil
 }
 
+// fakeMultiVersionedPlanRepo is a fake for tests that need multiple plans returned by ListActiveByTenant.
+type fakeMultiVersionedPlanRepo struct {
+	plans []commercialplans.Plan
+}
+
+func (r *fakeMultiVersionedPlanRepo) FindSellableByTenantSlug(_ context.Context, tenantID, slug, billingCycle, channel string, _ time.Time) (*commercialplans.Plan, error) {
+	for i := range r.plans {
+		p := &r.plans[i]
+		if p.TenantID != tenantID || p.Slug != slug || p.BillingCycle != billingCycle {
+			continue
+		}
+		if channel != "" && channel != commercialplans.ChannelAll && p.Channel != channel && p.Channel != commercialplans.ChannelAll {
+			continue
+		}
+		return p, nil
+	}
+	return nil, ErrPlanNotFound
+}
+
+func (r *fakeMultiVersionedPlanRepo) ListActiveByTenant(_ context.Context, tenantID, channel string) ([]commercialplans.Plan, error) {
+	var out []commercialplans.Plan
+	for _, p := range r.plans {
+		if p.TenantID != tenantID {
+			continue
+		}
+		if channel != "" && channel != commercialplans.ChannelAll && p.Channel != channel && p.Channel != commercialplans.ChannelAll {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
 type fakeOrganizationRepo struct {
 	org *organizations.Organization
 }

@@ -50,10 +50,25 @@ Frontend                           EDN Core (Cloud Run)              InfinitePay
 ## Passo 1 — Listar planos
 
 ```http
-GET /v1/plans?organization_slug=acme&tenant_slug=public&channel=web
+GET /v1/plans?organization_slug=edn-core&tenant_slug=fun-onl&channel=web
 ```
 
 Para o runtime multi-tenant, envie sempre `organization_slug` e `tenant_slug` juntos. O backend resolve os IDs reais da organização e do tenant no MongoDB e lê o catálogo publicado em `versioned_plans`.
+
+### Catálogo dev atual
+
+Escopo de desenvolvimento: `organization_slug=edn-core`, `tenant_slug=fun-onl`.
+
+| Plano (`plan_slug`) | `billing_cycle` | `price_cents` |
+| --- | --- | --- |
+| `administrative` | `monthly` | 14 900 |
+| `administrative` | `annual` | 143 040 |
+| `medical` | `monthly` | 24 900 |
+| `medical` | `annual` | 239 040 |
+| `dental` | `monthly` | 9 900 |
+| `dental` | `annual` | 95 040 |
+
+O campo `id` retornado na listagem é o `plan_uuid` do MongoDB — use-o apenas como chave React/lista. **Não envie `id` no POST `/v1/checkout/sessions`**: o checkout recebe `plan_slug` + `billing_cycle` e o backend resolve o plano publicado.
 
 Resposta:
 
@@ -61,15 +76,30 @@ Resposta:
 {
   "plans": [
     {
-      "slug": "pro",
-      "name": "Plano Pro",
+      "id": "<uuid-retornado-pela-api>",
+      "slug": "administrative",
+      "name": "Plano Administrativo Mensal",
       "billing_cycle": "monthly",
-      "price_cents": 9900,
-      "currency": "BRL"
+      "price_cents": 14900,
+      "currency": "BRL",
+      "active": true,
+      "max_installments": 1
+    },
+    {
+      "id": "<uuid-retornado-pela-api>",
+      "slug": "administrative",
+      "name": "Plano Administrativo Anual",
+      "billing_cycle": "annual",
+      "price_cents": 143040,
+      "currency": "BRL",
+      "active": true,
+      "max_installments": 12
     }
   ]
 }
 ```
+
+O campo `id` é apenas para exibição (e.g. React key). **Não envie `id` no POST /checkout/sessions** — o checkout recebe `plan_slug` + `billing_cycle` e o backend resolve o plano pelo catálogo publicado.
 
 Use `price_cents / 100` para exibir o preço. **Nunca envie o preço no request de checkout** — o backend sempre usa o valor do plano.
 
@@ -83,14 +113,16 @@ Content-Type: application/json
 Idempotency-Key: checkout-2026-04-25-user-123
 ```
 
+> **Browser / CORS:** o endpoint público aceita o header `Idempotency-Key` via preflight. Envie sempre essa chave em requisições originadas no browser.
+
 Body:
 
 ```json
 {
-  "organization_slug": "acme",
-  "tenant_slug": "public",
+  "organization_slug": "edn-core",
+  "tenant_slug": "fun-onl",
   "channel": "web",
-  "plan_slug": "pro",
+  "plan_slug": "administrative",
   "billing_cycle": "monthly",
   "customer": {
     "name": "João da Silva",
@@ -105,7 +137,7 @@ Body:
 | --- | --- | --- |
 | `organization_slug` | string slug pública | sim para catálogo multi-tenant |
 | `tenant_slug` | string slug pública | sim para catálogo multi-tenant |
-| `channel` | `"web"`, `"mobile"`, `"partner"` ou `"all"` | não, backend assume `"web"` |
+| `channel` | `"web"` ou `"mobile"` | não, backend assume `"web"` |
 | `plan_slug` | string, apenas letras minúsculas, números e `-_` | sim |
 | `billing_cycle` | `"monthly"` ou `"annual"` | sim |
 | `customer.name` | string não vazia | sim |
@@ -220,7 +252,7 @@ Não é necessário rodar o backend localmente para desenvolver o frontend.
 
 ## Sequência de testes manuais
 
-1. `GET /v1/plans?organization_slug=<org>&tenant_slug=<tenant>&channel=web` — confirmar que planos retornam com preços corretos
-2. `POST /v1/checkout/sessions` com `organization_slug`, `tenant_slug` e CPF válido → receber `checkout_url` e `order_nsu`
+1. `GET /v1/plans?organization_slug=edn-core&tenant_slug=fun-onl&channel=web` — confirmar que planos retornam com preços corretos
+2. `POST /v1/checkout/sessions` com `organization_slug=edn-core`, `tenant_slug=fun-onl`, `plan_slug=administrative`, `billing_cycle=monthly` e CPF válido → receber `checkout_url` e `order_nsu`
 3. Abrir `checkout_url` no browser → completar pagamento de teste (InfinitePay sandbox)
 4. `GET /v1/orders/{order_nsu}/status` → confirmar `status: "paid"` e `subscription_status: "active"`

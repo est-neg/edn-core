@@ -480,11 +480,14 @@ func versionedPlanResponses(plans []commercialplans.Plan) []PlanResponse {
 		}
 		seen[key] = struct{}{}
 		resp = append(resp, PlanResponse{
-			Slug:         plan.Slug,
-			Name:         plan.Name,
-			BillingCycle: plan.BillingCycle,
-			PriceCents:   plan.PriceCents,
-			Currency:     plan.Currency,
+			ID:              plan.PlanUUID,
+			Slug:            plan.Slug,
+			Name:            plan.Name,
+			BillingCycle:    plan.BillingCycle,
+			PriceCents:      plan.PriceCents,
+			Currency:        plan.Currency,
+			Active:          plan.Active,
+			MaxInstallments: plan.MaxInstallments,
 		})
 	}
 	return resp

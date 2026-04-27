@@ -68,6 +68,9 @@ Implementacao:
 - ampliar `internal/platform/mongodb`
 - adicionar nomes de colecao no `config`
 - garantir indices tenant-scoped e unicos
+- `ensureVersionedPlansIndexes` remove automaticamente o indice legado
+  `idx_versioned_plans_tenant_slug_version_unique` antes de criar os novos indices;
+  nenhum passo manual e necessario em staging ou producao
 
 Testes obrigatorios:
 

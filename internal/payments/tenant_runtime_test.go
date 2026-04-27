@@ -124,4 +124,100 @@ func TestPlanQueryService_ListActivePlans_UsesTenantVersionedCatalog(t *testing.
 	if plans[0].PriceCents != 29900 {
 		t.Fatalf("expected price_cents 29900, got %d", plans[0].PriceCents)
 	}
+	if plans[0].ID != "plan-v4" {
+		t.Fatalf("expected id plan-v4, got %q", plans[0].ID)
+	}
+	if !plans[0].Active {
+		t.Fatal("expected active true")
+	}
+	if plans[0].MaxInstallments != 12 {
+		t.Fatalf("expected max_installments 12, got %d", plans[0].MaxInstallments)
+	}
+}
+
+func TestPlanQueryService_ListActivePlans_SameSlugBothCycles(t *testing.T) {
+	now := time.Now().UTC()
+	repo := &fakeMultiVersionedPlanRepo{
+		plans: []commercialplans.Plan{
+			{
+				PlanUUID:        "plan-monthly-1",
+				OrganizationID:  "org-001",
+				TenantID:        "tenant-001",
+				Slug:            "pro",
+				Version:         1,
+				Name:            "Plano Pro Mensal",
+				BillingCycle:    commercialplans.BillingCycleMonthly,
+				PriceCents:      9900,
+				Currency:        "BRL",
+				MaxInstallments: 1,
+				Channel:         commercialplans.ChannelAll,
+				Active:          true,
+				ValidFrom:       now.Add(-time.Hour),
+				CreatedAt:       now,
+				UpdatedAt:       now,
+			},
+			{
+				PlanUUID:        "plan-annual-1",
+				OrganizationID:  "org-001",
+				TenantID:        "tenant-001",
+				Slug:            "pro",
+				Version:         1,
+				Name:            "Plano Pro Anual",
+				BillingCycle:    commercialplans.BillingCycleAnnual,
+				PriceCents:      99000,
+				Currency:        "BRL",
+				MaxInstallments: 12,
+				Channel:         commercialplans.ChannelAll,
+				Active:          true,
+				ValidFrom:       now.Add(-time.Hour),
+				CreatedAt:       now,
+				UpdatedAt:       now,
+			},
+		},
+	}
+	service := NewPlanQueryService(
+		repo,
+		&fakeOrganizationRepo{org: &organizations.Organization{OrgUUID: "org-001", Slug: "acme", Active: true}},
+		&fakeTenantRepo{tenant: &tenants.Tenant{TenantUUID: "tenant-001", OrganizationID: "org-001", Slug: "clinic", Active: true}},
+		zap.NewNop(),
+	)
+
+	plans, err := service.ListActivePlans(context.Background(), PlanListQuery{
+		OrganizationSlug: "acme",
+		TenantSlug:       "clinic",
+		Channel:          "web",
+	})
+	if err != nil {
+		t.Fatalf("ListActivePlans returned error: %v", err)
+	}
+	if len(plans) != 2 {
+		t.Fatalf("expected 2 plans (monthly + annual for same slug), got %d", len(plans))
+	}
+
+	byID := make(map[string]PlanResponse, 2)
+	for _, p := range plans {
+		byID[p.ID] = p
+	}
+
+	monthly, ok := byID["plan-monthly-1"]
+	if !ok {
+		t.Fatal("expected plan-monthly-1 in response")
+	}
+	if monthly.BillingCycle != commercialplans.BillingCycleMonthly {
+		t.Errorf("expected monthly billing cycle, got %q", monthly.BillingCycle)
+	}
+	if monthly.MaxInstallments != 1 {
+		t.Errorf("expected max_installments 1, got %d", monthly.MaxInstallments)
+	}
+
+	annual, ok := byID["plan-annual-1"]
+	if !ok {
+		t.Fatal("expected plan-annual-1 in response")
+	}
+	if annual.BillingCycle != commercialplans.BillingCycleAnnual {
+		t.Errorf("expected annual billing cycle, got %q", annual.BillingCycle)
+	}
+	if annual.MaxInstallments != 12 {
+		t.Errorf("expected max_installments 12, got %d", annual.MaxInstallments)
+	}
 }

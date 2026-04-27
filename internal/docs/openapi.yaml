@@ -360,10 +360,10 @@ paths:
         - name: channel
           in: query
           required: false
-          description: Canal comercial filtrado. O padrão operacional do checkout público é `web`.
+          description: Canal comercial filtrado. Apenas `web` e `mobile` são aceitos neste endpoint público. Canais internos (`partner`, `all`) não são aceitos e retornam erro.
           schema:
             type: string
-            enum: [web, mobile, partner, all]
+            enum: [web, mobile]
       responses:
         '200':
           description: Lista de planos
@@ -378,11 +378,22 @@ paths:
                       $ref: '#/components/schemas/Plan'
               example:
                 plans:
-                  - slug: "pro"
-                    name: "Plano Pro"
+                  - id: "550e8400-e29b-41d4-a716-446655440001"
+                    slug: "pro"
+                    name: "Plano Pro Mensal"
                     billing_cycle: "monthly"
                     price_cents: 9900
                     currency: "BRL"
+                    active: true
+                    max_installments: 1
+                  - id: "550e8400-e29b-41d4-a716-446655440002"
+                    slug: "pro"
+                    name: "Plano Pro Anual"
+                    billing_cycle: "annual"
+                    price_cents: 99000
+                    currency: "BRL"
+                    active: true
+                    max_installments: 12
         '404':
           description: Organização ou tenant não encontrados
         '422':
@@ -695,13 +706,16 @@ components:
     Plan:
       type: object
       properties:
+        id:
+          type: string
+          description: UUID público do plano (plan_uuid da coleção versioned_plans).
         slug:
           type: string
         name:
           type: string
         billing_cycle:
           type: string
-          enum: [monthly, annual]
+          enum: [monthly, annual, one_time]
         price_cents:
           type: integer
           description: Preço em centavos (BRL)
@@ -710,6 +724,9 @@ components:
           example: BRL
         active:
           type: boolean
+        max_installments:
+          type: integer
+          description: Número máximo de parcelas aceitas no checkout deste plano.
 
     # ── Checkout ─────────────────────────────────────────────────────────────
 
@@ -725,8 +742,8 @@ components:
           description: Slug público do tenant.
         channel:
           type: string
-          enum: [web, mobile, partner, all]
-          description: Canal comercial do checkout. Quando omitido, o backend assume `web`.
+          enum: [web, mobile]
+          description: Canal comercial do checkout. Apenas `web` e `mobile` são aceitos. Quando omitido, o backend assume `web`. Canais internos (`partner`, `all`) não são aceitos neste endpoint público.
         plan_slug:
           type: string
         billing_cycle:

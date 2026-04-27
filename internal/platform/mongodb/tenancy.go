@@ -194,20 +194,49 @@ func ensureIdempotencyKeysIndexes(ctx context.Context, coll *mongo.Collection) e
 	return nil
 }
 
+// dropIndexIfExists drops a named index from coll. It is a no-op when the index
+// does not exist (MongoDB code 27) or the collection namespace has not been
+// created yet (code 26). All other errors are returned to the caller.
+func dropIndexIfExists(ctx context.Context, coll *mongo.Collection, indexName string) error {
+	_, err := coll.Indexes().DropOne(ctx, indexName)
+	if err == nil {
+		return nil
+	}
+	if cmdErr, ok := err.(mongo.CommandError); ok {
+		// 26 = NamespaceNotFound, 27 = IndexNotFound — both are safe to ignore.
+		if cmdErr.Code == 26 || cmdErr.Code == 27 {
+			return nil
+		}
+	}
+	return err
+}
+
 func ensureVersionedPlansIndexes(ctx context.Context, coll *mongo.Collection) error {
+	// The legacy unique index lacked billing_cycle, which blocked two plans
+	// with the same slug but different billing cycles. Remove it automatically
+	// so that BootstrapTenancyStorage is safe to run on existing databases
+	// without a prior manual step.
+	const legacyIndex = "idx_versioned_plans_tenant_slug_version_unique"
+	if err := dropIndexIfExists(ctx, coll, legacyIndex); err != nil {
+		return fmt.Errorf("drop legacy versioned_plans index %q: %w", legacyIndex, err)
+	}
+
 	indexes := []mongo.IndexModel{
 		{
 			Keys:    bson.D{{Key: "plan_uuid", Value: 1}},
 			Options: options.Index().SetUnique(true).SetName("idx_versioned_plans_uuid_unique"),
 		},
 		{
-			// Unique: a specific version of a slug within a tenant is immutable.
+			// Unique: a specific version of a (slug, billing_cycle) pair within a tenant is
+			// immutable. billing_cycle is part of the key because the same slug is shared
+			// across monthly and annual variants of the same commercial offer.
 			Keys: bson.D{
 				{Key: "tenant_id", Value: 1},
 				{Key: "slug", Value: 1},
+				{Key: "billing_cycle", Value: 1},
 				{Key: "version", Value: 1},
 			},
-			Options: options.Index().SetUnique(true).SetName("idx_versioned_plans_tenant_slug_version_unique"),
+			Options: options.Index().SetUnique(true).SetName("idx_versioned_plans_tenant_slug_cycle_version_unique"),
 		},
 		{
 			// Hot-path: resolve active plans by tenant, channel, and billing cycle.
@@ -220,14 +249,17 @@ func ensureVersionedPlansIndexes(ctx context.Context, coll *mongo.Collection) er
 			Options: options.Index().SetName("idx_versioned_plans_tenant_channel_active_cycle"),
 		},
 		{
-			// Partial index: quickly find the active plan for a tenant+slug pair.
+			// Partial index: quickly resolve the active plan for a tenant, slug, and
+			// billing cycle. billing_cycle is included because the same slug supports
+			// both monthly and annual variants.
 			Keys: bson.D{
 				{Key: "tenant_id", Value: 1},
 				{Key: "slug", Value: 1},
+				{Key: "billing_cycle", Value: 1},
 			},
 			Options: options.Index().
 				SetPartialFilterExpression(bson.D{{Key: "active", Value: true}}).
-				SetName("idx_versioned_plans_tenant_slug_active_partial"),
+				SetName("idx_versioned_plans_tenant_slug_cycle_active_partial"),
 		},
 	}
 	if _, err := coll.Indexes().CreateMany(ctx, indexes); err != nil {

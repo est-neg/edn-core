@@ -168,13 +168,16 @@ func ValidateTenantScope(organizationSlug, tenantSlug string) error {
 
 // NormalizeSalesChannel validates and normalizes public commerce channel values.
 // Empty input defaults to web because public checkout traffic originates from the web channel.
+// Only "web" and "mobile" are accepted. "all" and "partner" are internal-only channels
+// and must not be accepted from unauthenticated public requests (e.g. GET /v1/plans or
+// public checkout). Returning an error ensures the public API surface stays minimal.
 func NormalizeSalesChannel(raw string) (string, error) {
 	channel := strings.ToLower(strings.TrimSpace(raw))
 	if channel == "" {
 		return commercialplans.ChannelWeb, nil
 	}
 	switch channel {
-	case commercialplans.ChannelWeb, commercialplans.ChannelMobile, commercialplans.ChannelPartner, commercialplans.ChannelAll:
+	case commercialplans.ChannelWeb, commercialplans.ChannelMobile:
 		return channel, nil
 	default:
 		return "", fmt.Errorf("%w: invalid channel", ErrInvalidRequest)
