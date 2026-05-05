@@ -20,6 +20,7 @@ const (
 	checkoutCreateOperation   = "checkout.create"
 	checkoutResourceTypeOrder = "order"
 	versionedPlanSource       = "versioned"
+	checkoutIntentKeyTTL      = 30 * time.Minute
 )
 
 type resolvedTenantScope struct {
@@ -86,13 +87,21 @@ func NewCheckoutService(
 // CreateSession validates the request, resolves plan pricing, creates an order,
 // calls InfinitePay, and returns the checkout URL.
 // Price and amount always come from the plan — never from the request.
+// When checkout_intent_key is provided, create-or-resume semantics are applied:
+// an active, non-expired order is returned with 200 instead of creating a new one.
 func (s *CheckoutService) CreateSession(ctx context.Context, req CreateCheckoutRequest) (CreateCheckoutResponse, error) {
-	if err := ValidateCreateCheckoutRequest(req); err != nil {
-		return CreateCheckoutResponse{}, err
-	}
 	idempotencyKey := normalizedCheckoutIdempotencyKey(req.IdempotencyKey)
 	if idempotencyKey == "" {
 		return CreateCheckoutResponse{}, fmt.Errorf("%w: missing Idempotency-Key header", ErrInvalidRequest)
+	}
+
+	// Resume path: checkout_intent_key provided → bypass plan/tenant resolution.
+	if intentKey := strings.TrimSpace(req.CheckoutIntentKey); intentKey != "" {
+		return s.resumeSession(ctx, intentKey)
+	}
+
+	if err := ValidateCreateCheckoutRequest(req); err != nil {
+		return CreateCheckoutResponse{}, err
 	}
 
 	phone, _ := NormalizePhone(req.Customer.Phone)
@@ -119,25 +128,31 @@ func (s *CheckoutService) CreateSession(ctx context.Context, req CreateCheckoutR
 		return *replay, nil
 	}
 
+	// Generate backend-owned resume handle and expiry before persisting the order.
+	intentKey := GenerateCheckoutIntentKey()
+	expiresAt := now.Add(checkoutIntentKeyTTL)
+
 	order := checkout.Order{
-		OrderNSU:         orderNSU,
-		OrganizationID:   scope.organizationID,
-		TenantID:         scope.tenantID,
-		PlanID:           plan.planID,
-		PlanSlug:         plan.slug,
-		PlanVersion:      plan.planVersion,
-		PlanSource:       plan.planSource,
-		BillingCycle:     plan.billingCycle,
-		AmountCents:      plan.priceCents, // ALWAYS from plan, never from request
-		Currency:         plan.currency,
-		CustomerName:     customerName,
-		CustomerEmail:    email,
-		CustomerPhone:    phone,
-		CustomerDocument: cpf,
-		Status:           string(OrderStatusCreated),
-		Provider:         "infinitepay",
-		CreatedAt:        now,
-		UpdatedAt:        now,
+		OrderNSU:          orderNSU,
+		OrganizationID:    scope.organizationID,
+		TenantID:          scope.tenantID,
+		PlanID:            plan.planID,
+		PlanSlug:          plan.slug,
+		PlanVersion:       plan.planVersion,
+		PlanSource:        plan.planSource,
+		BillingCycle:      plan.billingCycle,
+		AmountCents:       plan.priceCents, // ALWAYS from plan, never from request
+		Currency:          plan.currency,
+		CustomerName:      customerName,
+		CustomerEmail:     email,
+		CustomerPhone:     phone,
+		CustomerDocument:  cpf,
+		Status:            string(OrderStatusCreated),
+		Provider:          "infinitepay",
+		CheckoutIntentKey: intentKey,
+		ExpiresAt:         expiresAt,
+		CreatedAt:         now,
+		UpdatedAt:         now,
 	}
 
 	if err := s.orders.Create(ctx, order); err != nil {
@@ -153,6 +168,13 @@ func (s *CheckoutService) CreateSession(ctx context.Context, req CreateCheckoutR
 		return CreateCheckoutResponse{}, fmt.Errorf("acquire lock: %w", err)
 	}
 	defer s.lock.ReleaseOrderLock(ctx, orderNSU, lockToken) //nolint:errcheck
+
+	// Persist the create-attempt marker before calling the provider.
+	// This ensures recovery can detect partial attempts and avoid unsafe blind recreation.
+	attemptedAt := time.Now().UTC()
+	if err := s.orders.MarkProviderCreateAttempted(ctx, orderNSU, attemptedAt); err != nil {
+		return CreateCheckoutResponse{}, fmt.Errorf("persist provider create attempt marker: %w", err)
+	}
 
 	providerReq := InfinitePayCheckoutRequest{
 		Handle:           s.cfg.InfinitePay.Handle,
@@ -191,22 +213,298 @@ func (s *CheckoutService) CreateSession(ctx context.Context, req CreateCheckoutR
 	)
 	persistErr := s.persistCheckoutSession(ctx, orderNSU, providerResp.CheckoutURL, providerResp.InvoiceSlug, OrderStatusCheckoutCreated, updatedAt)
 	if commitErr != nil && persistErr != nil {
-		return CreateCheckoutResponse{}, fmt.Errorf("persist checkout result: %w", errors.Join(commitErr, persistErr))
-	}
-	if commitErr != nil {
-		s.log.Warn("failed to commit checkout idempotency snapshot", zap.String("order_nsu", orderNSU), zap.Error(commitErr))
+		// Nothing durable: provider URL is in neither idempotency snapshot nor order.
+		s.log.Error("checkout persist failed: both idempotency commit and order persist failed",
+			zap.String("order_nsu", orderNSU), zap.Error(commitErr))
+		return CreateCheckoutResponse{}, ErrProviderStateAmbiguous
 	}
 	if persistErr != nil {
-		s.log.Error("failed to persist checkout order after successful provider response", zap.String("order_nsu", orderNSU), zap.Error(persistErr))
+		// Idempotency commit succeeded (URL captured) but order persist failed.
+		// A same-key retry can replay from the idempotency snapshot and repair the order.
+		s.log.Error("checkout persist failed: order not updated after successful provider and idempotency commit",
+			zap.String("order_nsu", orderNSU), zap.Error(persistErr))
+		return CreateCheckoutResponse{}, ErrCheckoutRecoveryRequired
+	}
+	if commitErr != nil {
+		// Order persist succeeded but idempotency commit failed.
+		// The provider URL is durable on the order. Log a warning only.
+		s.log.Warn("failed to commit checkout idempotency snapshot", zap.String("order_nsu", orderNSU), zap.Error(commitErr))
 	}
 
 	s.statusCache.SetOrderStatus(ctx, orderNSU, string(OrderStatusCheckoutCreated)) //nolint:errcheck
 
+	s.log.Info("checkout created",
+		zap.String("order_nsu", orderNSU),
+		zap.String("tenant_id", scope.tenantID),
+		zap.String("metric", "checkout_created"),
+	)
+
 	return CreateCheckoutResponse{
-		OrderNSU:    orderNSU,
-		Status:      OrderStatusCheckoutCreated,
-		CheckoutURL: providerResp.CheckoutURL,
-		ExpiresAt:   now.Add(30 * time.Minute),
+		OrderNSU:          orderNSU,
+		CheckoutIntentKey: intentKey,
+		Status:            OrderStatusCheckoutCreated,
+		CheckoutURL:       providerResp.CheckoutURL,
+		ExpiresAt:         expiresAt,
+	}, nil
+}
+
+// resumeSession handles the resume path when a checkout_intent_key is provided.
+// It locates the order by the backend-issued handle, validates eligibility, and returns
+// the canonical success payload with Resumed=true so the handler emits 200.
+func (s *CheckoutService) resumeSession(ctx context.Context, intentKey string) (CreateCheckoutResponse, error) {
+	order, err := s.orders.FindByIntentKey(ctx, intentKey)
+	if err != nil {
+		if errors.Is(err, ErrOrderNotFound) {
+			// Unknown key: not a valid backend-issued handle.
+			s.log.Warn("resume attempted with unknown checkout_intent_key",
+				zap.String("metric", "checkout_non_resumable"),
+			)
+			return CreateCheckoutResponse{}, ErrCheckoutNonResumable
+		}
+		return CreateCheckoutResponse{}, fmt.Errorf("find order by intent key: %w", err)
+	}
+
+	now := time.Now().UTC()
+
+	// Backend-authoritative expiry check.
+	if !order.ExpiresAt.IsZero() && now.After(order.ExpiresAt) {
+		s.log.Info("resume rejected: checkout expired",
+			zap.String("order_nsu", order.OrderNSU),
+			zap.String("tenant_id", order.TenantID),
+			zap.String("metric", "checkout_expired"),
+		)
+		return CreateCheckoutResponse{}, ErrCheckoutExpired
+	}
+
+	// Status eligibility matrix.
+	status := OrderStatus(order.Status)
+	switch status {
+	case OrderStatusPaid, OrderStatusFailed, OrderStatusExpired, OrderStatusPendingReview:
+		s.log.Info("resume rejected: checkout not resumable",
+			zap.String("order_nsu", order.OrderNSU),
+			zap.String("tenant_id", order.TenantID),
+			zap.String("status", string(status)),
+			zap.String("metric", "checkout_non_resumable"),
+		)
+		return CreateCheckoutResponse{}, ErrCheckoutNonResumable
+	}
+
+	// Order has no confirmed provider URL — attempt synchronous recovery.
+	if strings.TrimSpace(order.ProviderCheckoutURL) == "" {
+		return s.recoverCheckoutSession(ctx, order)
+	}
+
+	s.log.Info("checkout resumed",
+		zap.String("order_nsu", order.OrderNSU),
+		zap.String("tenant_id", order.TenantID),
+		zap.String("metric", "checkout_resumed"),
+	)
+
+	// Normalize status for the canonical response.
+	if status == OrderStatusCreated {
+		status = OrderStatusCheckoutCreated
+	}
+
+	return CreateCheckoutResponse{
+		OrderNSU:          order.OrderNSU,
+		CheckoutIntentKey: order.CheckoutIntentKey,
+		Status:            status,
+		CheckoutURL:       order.ProviderCheckoutURL,
+		ExpiresAt:         order.ExpiresAt,
+		Resumed:           true,
+	}, nil
+}
+
+// recoverCheckoutSession is called by resumeSession when the order has no provider_checkout_url.
+// It acquires the order lock, re-reads the order, and either returns success if the URL
+// appeared while waiting, fails with ErrProviderStateAmbiguous for genuinely ambiguous state,
+// or synchronously creates the InfinitePay checkout for the same order and persists the result.
+func (s *CheckoutService) recoverCheckoutSession(ctx context.Context, firstRead *checkout.Order) (CreateCheckoutResponse, error) {
+	lockToken := uuid.New().String()
+	if err := s.lock.AcquireOrderLock(ctx, firstRead.OrderNSU, lockToken); err != nil {
+		return CreateCheckoutResponse{}, fmt.Errorf("acquire recovery lock: %w", err)
+	}
+	defer s.lock.ReleaseOrderLock(ctx, firstRead.OrderNSU, lockToken) //nolint:errcheck
+
+	// Re-read under lock — a concurrent create may have already persisted the URL.
+	order, err := s.orders.GetByNSU(ctx, firstRead.OrderNSU)
+	if err != nil {
+		return CreateCheckoutResponse{}, ErrProviderStateAmbiguous
+	}
+
+	now := time.Now().UTC()
+
+	// Re-check expiry and terminal status on the freshly-read order.
+	if !order.ExpiresAt.IsZero() && now.After(order.ExpiresAt) {
+		return CreateCheckoutResponse{}, ErrCheckoutExpired
+	}
+	status := OrderStatus(order.Status)
+	switch status {
+	case OrderStatusPaid, OrderStatusFailed, OrderStatusExpired, OrderStatusPendingReview:
+		return CreateCheckoutResponse{}, ErrCheckoutNonResumable
+	}
+
+	// URL appeared while we were waiting for the lock.
+	if strings.TrimSpace(order.ProviderCheckoutURL) != "" {
+		if status == OrderStatusCreated {
+			status = OrderStatusCheckoutCreated
+		}
+		return CreateCheckoutResponse{
+			OrderNSU:          order.OrderNSU,
+			CheckoutIntentKey: order.CheckoutIntentKey,
+			Status:            status,
+			CheckoutURL:       order.ProviderCheckoutURL,
+			ExpiresAt:         order.ExpiresAt,
+			Resumed:           true,
+		}, nil
+	}
+
+	// invoice_slug present without URL means a partial provider response was received;
+	// re-creating would risk a duplicate charge.
+	if strings.TrimSpace(order.InvoiceSlug) != "" {
+		s.log.Warn("recovery blocked: invoice_slug present without provider_checkout_url",
+			zap.String("order_nsu", order.OrderNSU),
+			zap.String("tenant_id", order.TenantID),
+			zap.String("metric", "checkout_recovery_ambiguous"),
+		)
+		return CreateCheckoutResponse{}, ErrProviderStateAmbiguous
+	}
+
+	// If a provider-create attempt was previously recorded but no URL was persisted,
+	// we cannot safely issue a new provider request. Try to repair from the idempotency snapshot.
+	if order.ProviderCreateAttemptedAt != nil {
+		return s.recoverFromIdempotencySnapshot(ctx, order)
+	}
+
+	// Validate we can reconstruct the provider request from the persisted plan.
+	if strings.TrimSpace(order.PlanID) == "" {
+		s.log.Warn("recovery blocked: order missing plan_id",
+			zap.String("order_nsu", order.OrderNSU),
+			zap.String("metric", "checkout_recovery_ambiguous"),
+		)
+		return CreateCheckoutResponse{}, ErrProviderStateAmbiguous
+	}
+
+	plan, err := s.versionedPlans.FindByUUID(ctx, order.PlanID)
+	if err != nil {
+		s.log.Warn("recovery blocked: plan lookup failed",
+			zap.String("order_nsu", order.OrderNSU),
+			zap.String("plan_id", order.PlanID),
+			zap.Error(err),
+			zap.String("metric", "checkout_recovery_ambiguous"),
+		)
+		return CreateCheckoutResponse{}, ErrProviderStateAmbiguous
+	}
+
+	if plan.PriceCents != order.AmountCents {
+		s.log.Warn("recovery blocked: plan price mismatch",
+			zap.String("order_nsu", order.OrderNSU),
+			zap.Int64("plan_price_cents", plan.PriceCents),
+			zap.Int64("order_amount_cents", order.AmountCents),
+			zap.String("metric", "checkout_recovery_ambiguous"),
+		)
+		return CreateCheckoutResponse{}, ErrProviderStateAmbiguous
+	}
+
+	providerReq := InfinitePayCheckoutRequest{
+		Handle:           s.cfg.InfinitePay.Handle,
+		OrderNSU:         order.OrderNSU,
+		PlanName:         plan.Name,
+		AmountCents:      plan.PriceCents,
+		Currency:         plan.Currency,
+		MaxInstallments:  plan.MaxInstallments,
+		CustomerName:     order.CustomerName,
+		CustomerEmail:    order.CustomerEmail,
+		CustomerPhone:    order.CustomerPhone,
+		CustomerDocument: order.CustomerDocument,
+		WebhookURL:       s.cfg.WebhookURL,
+		RedirectURL:      s.cfg.RedirectURL,
+	}
+
+	providerResp, err := s.provider.CreateCheckout(ctx, providerReq)
+	if err != nil {
+		s.log.Warn("recovery: provider checkout creation failed",
+			zap.String("order_nsu", order.OrderNSU),
+			zap.Error(err),
+			zap.String("metric", "checkout_recovery_ambiguous"),
+		)
+		return CreateCheckoutResponse{}, ErrProviderStateAmbiguous
+	}
+
+	updatedAt := time.Now().UTC()
+	if err := s.persistCheckoutSession(ctx, order.OrderNSU, providerResp.CheckoutURL, providerResp.InvoiceSlug, OrderStatusCheckoutCreated, updatedAt); err != nil {
+		s.log.Error("recovery: persist failed after successful provider response",
+			zap.String("order_nsu", order.OrderNSU),
+			zap.Error(err),
+			zap.String("metric", "checkout_recovery_ambiguous"),
+		)
+		return CreateCheckoutResponse{}, ErrProviderStateAmbiguous
+	}
+
+	s.statusCache.SetOrderStatus(ctx, order.OrderNSU, string(OrderStatusCheckoutCreated)) //nolint:errcheck
+
+	s.log.Info("checkout recovered",
+		zap.String("order_nsu", order.OrderNSU),
+		zap.String("tenant_id", order.TenantID),
+		zap.Bool("checkout_recovered", true),
+	)
+
+	return CreateCheckoutResponse{
+		OrderNSU:          order.OrderNSU,
+		CheckoutIntentKey: order.CheckoutIntentKey,
+		Status:            OrderStatusCheckoutCreated,
+		CheckoutURL:       providerResp.CheckoutURL,
+		ExpiresAt:         order.ExpiresAt,
+		Resumed:           true,
+	}, nil
+}
+
+// recoverFromIdempotencySnapshot attempts to repair an order whose provider-create was attempted
+// but whose provider_checkout_url was never persisted. It looks up the idempotency
+// snapshot by order_nsu (resource_id) and, if committed with a durable ResourceURL, repairs the
+// order without a second provider call. Returns ErrProviderStateAmbiguous when the snapshot
+// cannot confirm the URL.
+func (s *CheckoutService) recoverFromIdempotencySnapshot(ctx context.Context, order *checkout.Order) (CreateCheckoutResponse, error) {
+	record, err := s.idempotency.FindByTenantOpResourceID(ctx, order.TenantID, checkoutCreateOperation, order.OrderNSU)
+	if err != nil {
+		s.log.Warn("recovery: idempotency snapshot not found",
+			zap.String("order_nsu", order.OrderNSU),
+			zap.Error(err),
+			zap.String("metric", "checkout_recovery_ambiguous"),
+		)
+		return CreateCheckoutResponse{}, ErrProviderStateAmbiguous
+	}
+	if record.Status != idempotency.StatusCommitted || record.ResourceURL == "" {
+		s.log.Warn("recovery: idempotency snapshot not committed or missing durable URL",
+			zap.String("order_nsu", order.OrderNSU),
+			zap.String("snapshot_status", record.Status),
+			zap.String("metric", "checkout_recovery_ambiguous"),
+		)
+		return CreateCheckoutResponse{}, ErrProviderStateAmbiguous
+	}
+	// Repair the order from the snapshot — no new provider call.
+	updatedAt := time.Now().UTC()
+	if err := s.persistCheckoutSession(ctx, order.OrderNSU, record.ResourceURL, record.ExternalRef, OrderStatusCheckoutCreated, updatedAt); err != nil {
+		s.log.Error("recovery: persist from idempotency snapshot failed",
+			zap.String("order_nsu", order.OrderNSU),
+			zap.Error(err),
+			zap.String("metric", "checkout_recovery_ambiguous"),
+		)
+		return CreateCheckoutResponse{}, ErrProviderStateAmbiguous
+	}
+	s.statusCache.SetOrderStatus(ctx, order.OrderNSU, string(OrderStatusCheckoutCreated)) //nolint:errcheck
+	s.log.Info("checkout recovered from idempotency snapshot",
+		zap.String("order_nsu", order.OrderNSU),
+		zap.String("tenant_id", order.TenantID),
+		zap.Bool("checkout_recovered", true),
+	)
+	return CreateCheckoutResponse{
+		OrderNSU:          order.OrderNSU,
+		CheckoutIntentKey: order.CheckoutIntentKey,
+		Status:            OrderStatusCheckoutCreated,
+		CheckoutURL:       record.ResourceURL,
+		ExpiresAt:         order.ExpiresAt,
+		Resumed:           true,
 	}, nil
 }
 
@@ -234,6 +532,9 @@ func (s *CheckoutService) replayExistingSession(ctx context.Context, tenantID, i
 	}
 	if strings.TrimSpace(order.ProviderCheckoutURL) == "" {
 		if existing.ResourceURL == "" {
+			if order.ProviderCreateAttemptedAt != nil {
+				return CreateCheckoutResponse{}, ErrProviderStateAmbiguous
+			}
 			return CreateCheckoutResponse{}, ErrCheckoutInProgress
 		}
 		s.repairCheckoutOrder(ctx, order.OrderNSU, existing.ResourceURL, existing.ExternalRef, existing.ResourceStatus, existing.UpdatedAt)
@@ -245,11 +546,17 @@ func (s *CheckoutService) replayExistingSession(ctx context.Context, tenantID, i
 		status = OrderStatusCheckoutCreated
 	}
 
+	expiresAt := order.ExpiresAt
+	if expiresAt.IsZero() {
+		expiresAt = order.CreatedAt.Add(checkoutIntentKeyTTL)
+	}
+
 	return CreateCheckoutResponse{
-		OrderNSU:    order.OrderNSU,
-		Status:      status,
-		CheckoutURL: order.ProviderCheckoutURL,
-		ExpiresAt:   order.CreatedAt.Add(30 * time.Minute),
+		OrderNSU:          order.OrderNSU,
+		CheckoutIntentKey: order.CheckoutIntentKey,
+		Status:            status,
+		CheckoutURL:       order.ProviderCheckoutURL,
+		ExpiresAt:         expiresAt,
 	}, nil
 }
 
@@ -291,17 +598,26 @@ func (s *CheckoutService) reserveOrReplayCheckout(ctx context.Context, scope res
 	if err == nil {
 		if strings.TrimSpace(order.ProviderCheckoutURL) == "" {
 			if existing.ResourceURL == "" {
+				if order.ProviderCreateAttemptedAt != nil {
+					return "", nil, ErrProviderStateAmbiguous
+				}
 				return "", nil, ErrCheckoutInProgress
 			}
 			s.repairCheckoutOrder(ctx, order.OrderNSU, existing.ResourceURL, existing.ExternalRef, existing.ResourceStatus, existing.UpdatedAt)
 			replay := createCheckoutResponseFromRecord(existing, order.CreatedAt)
+			replay.CheckoutIntentKey = order.CheckoutIntentKey
 			return "", &replay, nil
 		}
+		expiresAt := order.ExpiresAt
+		if expiresAt.IsZero() {
+			expiresAt = order.CreatedAt.Add(checkoutIntentKeyTTL)
+		}
 		replay := CreateCheckoutResponse{
-			OrderNSU:    order.OrderNSU,
-			Status:      OrderStatusCheckoutCreated,
-			CheckoutURL: order.ProviderCheckoutURL,
-			ExpiresAt:   order.CreatedAt.Add(30 * time.Minute),
+			OrderNSU:          order.OrderNSU,
+			CheckoutIntentKey: order.CheckoutIntentKey,
+			Status:            OrderStatusCheckoutCreated,
+			CheckoutURL:       order.ProviderCheckoutURL,
+			ExpiresAt:         expiresAt,
 		}
 		return "", &replay, nil
 	}
@@ -353,7 +669,9 @@ func createCheckoutResponseFromRecord(record *idempotency.Key, createdAt time.Ti
 		OrderNSU:    record.ResourceID,
 		Status:      status,
 		CheckoutURL: record.ResourceURL,
-		ExpiresAt:   expiresAtBase.Add(30 * time.Minute),
+		ExpiresAt:   expiresAtBase.Add(checkoutIntentKeyTTL),
+		// CheckoutIntentKey is not stored in the idempotency record;
+		// callers must set it from the order when available.
 	}
 }
 
@@ -422,6 +740,94 @@ func (s *OrderStatusService) GetStatus(ctx context.Context, orderNSU string) (Or
 	}
 
 	return resp, nil
+}
+
+// TrackByIntentKey returns a public-safe TrackCheckoutResponse for the given checkout_intent_key.
+// Returns ErrOrderNotFound when the key does not match any backend-issued handle.
+// Does not return customer PII.
+// Effective status semantics:
+//   - If the order is non-terminal but expires_at has passed, status is returned as "expired" and resumable=false.
+//   - checkout_url is only set when the order is still resumable/open.
+func (s *OrderStatusService) TrackByIntentKey(ctx context.Context, intentKey string) (TrackCheckoutResponse, error) {
+	order, err := s.orders.FindByIntentKey(ctx, intentKey)
+	if err != nil {
+		return TrackCheckoutResponse{}, err
+	}
+
+	now := time.Now().UTC()
+	storedStatus := OrderStatus(order.Status)
+
+	// If the order is non-terminal but the expiry window has passed, reflect expired semantics.
+	effectivelyExpired := !order.ExpiresAt.IsZero() && now.After(order.ExpiresAt) && isResumableStatus(storedStatus)
+
+	status := storedStatus
+	if effectivelyExpired {
+		status = OrderStatusExpired
+	}
+
+	resumable := isResumableStatus(storedStatus) && !effectivelyExpired
+
+	resp := TrackCheckoutResponse{
+		OrderNSU:          order.OrderNSU,
+		CheckoutIntentKey: order.CheckoutIntentKey,
+		Status:            status,
+		PlanSlug:          order.PlanSlug,
+		ExpiresAt:         order.ExpiresAt,
+		UpdatedAt:         order.UpdatedAt,
+		Resumable:         resumable,
+	}
+	if resumable && strings.TrimSpace(order.ProviderCheckoutURL) != "" {
+		resp.CheckoutURL = order.ProviderCheckoutURL
+	}
+	if storedStatus == OrderStatusPaid {
+		resp.ReceiptURL = order.ReceiptURL
+	}
+	return resp, nil
+}
+
+// RecoverByIntentKey exposes the resume+recovery path for the public tracking endpoint.
+// It reuses the same eligibility checks and synchronous recovery logic as CreateSession.
+// Returns ErrProviderStateAmbiguous when recovery is unsafe due to partial provider state.
+func (s *CheckoutService) RecoverByIntentKey(ctx context.Context, intentKey string) (CreateCheckoutResponse, error) {
+	return s.resumeSession(ctx, intentKey)
+}
+
+// SearchByDocument returns operational order summaries for a normalized CPF (11 digits).
+// normalizedDocument must already be validated and normalized by the caller.
+// The raw CPF is never logged inside this method.
+func (s *OrderStatusService) SearchByDocument(ctx context.Context, normalizedDocument string) ([]AdminOrderSummary, error) {
+	orders, err := s.orders.FindByCustomerDocument(ctx, normalizedDocument)
+	if err != nil {
+		return nil, fmt.Errorf("search orders by document: %w", err)
+	}
+	summaries := make([]AdminOrderSummary, 0, len(orders))
+	for _, o := range orders {
+		sum := AdminOrderSummary{
+			OrderNSU:     o.OrderNSU,
+			Status:       OrderStatus(o.Status),
+			PlanSlug:     o.PlanSlug,
+			BillingCycle: o.BillingCycle,
+			AmountCents:  o.AmountCents,
+			Currency:     o.Currency,
+			CreatedAt:    o.CreatedAt,
+			UpdatedAt:    o.UpdatedAt,
+		}
+		if !o.ExpiresAt.IsZero() {
+			t := o.ExpiresAt
+			sum.ExpiresAt = &t
+		}
+		summaries = append(summaries, sum)
+	}
+	return summaries, nil
+}
+
+// isResumableStatus reports whether the given order status allows a new checkout attempt.
+func isResumableStatus(s OrderStatus) bool {
+	switch s {
+	case OrderStatusCreated, OrderStatusCheckoutCreated, OrderStatusPending:
+		return true
+	}
+	return false
 }
 
 func (s *CheckoutService) resolveCheckoutPlan(ctx context.Context, scope resolvedTenantScope, planSlug, billingCycle string, now time.Time) (resolvedCheckoutPlan, error) {

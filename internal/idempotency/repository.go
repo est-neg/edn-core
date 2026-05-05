@@ -23,6 +23,10 @@ type Repository interface {
 	// Returns ErrNotFound when no record exists.
 	FindByTenantOpKey(ctx context.Context, tenantID, operation, idempotencyKey string) (*Key, error)
 
+	// FindByTenantOpResourceID looks up an existing record by tenant, operation, and the persisted resource_id.
+	// Returns ErrNotFound when no record exists.
+	FindByTenantOpResourceID(ctx context.Context, tenantID, operation, resourceID string) (*Key, error)
+
 	// Commit updates the record to status=committed and records the durable replay snapshot.
 	Commit(ctx context.Context, tenantID, operation, idempotencyKey, resourceID, resourceStatus, resourceURL, externalRef string, updatedAt time.Time) error
 

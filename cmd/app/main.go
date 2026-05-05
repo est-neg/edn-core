@@ -136,7 +136,7 @@ func main() {
 		storeAdapter, storeAdapter, storeAdapter,
 		ipClient, log,
 	)
-	paymentsHandler := payments.NewHandler(checkoutSvc, statusSvc, planSvc, webhookSvc, log)
+	paymentsHandler := payments.NewHandler(checkoutSvc, statusSvc, planSvc, webhookSvc, cfg.HTTP.AdminAuthToken, log)
 
 	// ── Router ──────────────────────────────────────────────────────────────
 	r := chi.NewRouter()
@@ -170,9 +170,15 @@ func main() {
 	r.Method(http.MethodPost, "/api/leads", protectedLeads)
 
 	// Payments
+	trackLimiter := payments.NewTrackRateLimiter(log)
+	adminSearchLimiter := payments.NewAdminSearchRateLimiter(log)
+	createSessionLimiter := payments.NewCreateSessionRateLimiter(log)
+
 	r.Get("/v1/plans", paymentsHandler.ListPlans)
-	r.Post("/v1/checkout/sessions", paymentsHandler.CreateCheckoutSession)
+	r.Method(http.MethodPost, "/v1/checkout/sessions", createSessionLimiter(http.HandlerFunc(paymentsHandler.CreateCheckoutSession)))
+	r.Method(http.MethodPost, "/v1/checkout/sessions/track", trackLimiter(http.HandlerFunc(paymentsHandler.TrackCheckoutSession)))
 	r.Get("/v1/orders/{orderNSU}/status", paymentsHandler.GetOrderStatus)
+	r.Method(http.MethodPost, "/api/v1/orders/search", adminSearchLimiter(http.HandlerFunc(paymentsHandler.SearchOrdersByDocument)))
 	// Webhook route uses a secret path segment — NOT a URL parameter — to prevent enumeration.
 	r.Post("/v1/webhooks/infinitepay/"+cfg.Payments.WebhookSecretPath, paymentsHandler.HandleWebhook)
 

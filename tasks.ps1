@@ -1,6 +1,10 @@
+[CmdletBinding()]
 param(
     [Parameter(Position=0)]
-    [string]$Task = "help"
+    [string]$Task = "help",
+
+    [Parameter(ValueFromRemainingArguments)]
+    [string[]]$ExtraArgs = @()
 )
 
 $BIN_APP   = "vil-app"
@@ -129,6 +133,20 @@ switch ($Task) {
         go run ./cmd/dev-seed
     }
 
+    "recreate-checkout" {
+        # Usage: .\tasks.ps1 recreate-checkout -order-nsu <NSU> [-channel web|mobile] [-dry-run]
+        # Push-Location ensures go run resolves ./cmd/recreate-checkout from the repo root
+        # regardless of the directory from which this script was invoked.
+        Push-Location $PSScriptRoot
+        try {
+            Import-Env @(".env.development", ".env.local")
+            & go run ./cmd/recreate-checkout @ExtraArgs
+        } finally {
+            Pop-Location
+        }
+        exit $LASTEXITCODE
+    }
+
     "help" {
         Write-Host ""
         Write-Host "Targets disponiveis:" -ForegroundColor Cyan
@@ -154,6 +172,7 @@ switch ($Task) {
         Write-Host ""
         Write-Host "  DEV DATA:" -ForegroundColor Yellow
         Write-Host "    seed-dev         Popula o MongoDB de desenvolvimento com org/tenant/catalog/plans"
+        Write-Host "    recreate-checkout  Recria checkout de pedido legado: -order-nsu <NSU> [-channel web|mobile] [-dry-run]"
         Write-Host ""
         Write-Host "  QUALIDADE:" -ForegroundColor Yellow
         Write-Host "    test             Roda todos os testes"

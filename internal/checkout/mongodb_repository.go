@@ -45,6 +45,18 @@ func (r *mongoOrders) FindByNSU(ctx context.Context, orderNSU string) (*Order, e
 	return &o, nil
 }
 
+func (r *mongoOrders) FindByIntentKey(ctx context.Context, intentKey string) (*Order, error) {
+	var o Order
+	err := r.coll.FindOne(ctx, bson.D{{Key: "checkout_intent_key", Value: intentKey}}).Decode(&o)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, ErrOrderNotFound
+		}
+		return nil, fmt.Errorf("find order by intent key: %w", err)
+	}
+	return &o, nil
+}
+
 // UpdateStatus updates order status by order_nsu.
 // Caller must hold the Redis order lock before invoking this method.
 func (r *mongoOrders) UpdateStatus(ctx context.Context, orderNSU, status string, updatedAt time.Time) error {
@@ -91,6 +103,38 @@ func (r *mongoOrders) UpdateReceipt(ctx context.Context, orderNSU, receiptURL st
 		return ErrOrderNotFound
 	}
 	return nil
+}
+
+func (r *mongoOrders) MarkProviderCreateAttempted(ctx context.Context, orderNSU string, attemptedAt time.Time) error {
+	update := bson.D{{Key: "$set", Value: bson.D{
+		{Key: "provider_create_attempted_at", Value: attemptedAt},
+		{Key: "updated_at", Value: attemptedAt},
+	}}}
+	res, err := r.coll.UpdateOne(ctx, bson.D{{Key: "order_nsu", Value: orderNSU}}, update)
+	if err != nil {
+		return fmt.Errorf("mark provider create attempted: %w", err)
+	}
+	if res.MatchedCount == 0 {
+		return ErrOrderNotFound
+	}
+	return nil
+}
+
+func (r *mongoOrders) FindByCustomerDocument(ctx context.Context, normalizedDocument string) ([]Order, error) {
+	opts := options.Find().SetSort(bson.D{{Key: "created_at", Value: -1}}).SetLimit(100)
+	cursor, err := r.coll.Find(ctx, bson.D{{Key: "customer_document", Value: normalizedDocument}}, opts)
+	if err != nil {
+		return nil, fmt.Errorf("find orders by customer document: %w", err)
+	}
+	defer cursor.Close(ctx)
+	var orders []Order
+	if err := cursor.All(ctx, &orders); err != nil {
+		return nil, fmt.Errorf("decode orders by customer document: %w", err)
+	}
+	if orders == nil {
+		orders = []Order{}
+	}
+	return orders, nil
 }
 
 // ─── Payments ─────────────────────────────────────────────────────────────────

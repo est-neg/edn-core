@@ -30,8 +30,16 @@ type Order struct {
 	ProviderCheckoutURL string             `bson:"provider_checkout_url,omitempty"`
 	InvoiceSlug         string             `bson:"invoice_slug,omitempty"`
 	ReceiptURL          string             `bson:"receipt_url,omitempty"`
-	CreatedAt           time.Time          `bson:"created_at"`
-	UpdatedAt           time.Time          `bson:"updated_at"`
+	// CheckoutIntentKey is the backend-issued opaque resume handle. High-entropy, not derivable from PII.
+	CheckoutIntentKey string `bson:"checkout_intent_key,omitempty"`
+	// ProviderCreateAttemptedAt records the timestamp when the backend first called the provider for this order.
+	// When set and provider_checkout_url is absent, the order is in an ambiguous state and must not be
+	// recreated without first checking the idempotency snapshot for a durable ResourceURL.
+	ProviderCreateAttemptedAt *time.Time `bson:"provider_create_attempted_at,omitempty"`
+	// ExpiresAt is backend-authoritative. Persisted at creation. Zero value means no expiry set.
+	ExpiresAt time.Time `bson:"expires_at,omitempty"`
+	CreatedAt time.Time `bson:"created_at"`
+	UpdatedAt time.Time `bson:"updated_at"`
 }
 
 // Payment represents a payment transaction document stored in the payments collection.

@@ -26,6 +26,10 @@ func (r *orderRepo) GetByNSU(ctx context.Context, orderNSU string) (*checkout.Or
 	return r.inner.FindByNSU(ctx, orderNSU)
 }
 
+func (r *orderRepo) FindByIntentKey(ctx context.Context, intentKey string) (*checkout.Order, error) {
+	return r.inner.FindByIntentKey(ctx, intentKey)
+}
+
 func (r *orderRepo) UpdateStatus(ctx context.Context, orderNSU string, status OrderStatus, updatedAt time.Time) error {
 	return r.inner.UpdateStatus(ctx, orderNSU, string(status), updatedAt)
 }
@@ -36,6 +40,14 @@ func (r *orderRepo) UpdateProviderURL(ctx context.Context, orderNSU, checkoutURL
 
 func (r *orderRepo) UpdateReceipt(ctx context.Context, orderNSU, receiptURL string, updatedAt time.Time) error {
 	return r.inner.UpdateReceipt(ctx, orderNSU, receiptURL, updatedAt)
+}
+
+func (r *orderRepo) MarkProviderCreateAttempted(ctx context.Context, orderNSU string, attemptedAt time.Time) error {
+	return r.inner.MarkProviderCreateAttempted(ctx, orderNSU, attemptedAt)
+}
+
+func (r *orderRepo) FindByCustomerDocument(ctx context.Context, normalizedDocument string) ([]checkout.Order, error) {
+	return r.inner.FindByCustomerDocument(ctx, normalizedDocument)
 }
 
 // checkoutIdempotencyRepo adapts idempotency.Repository to payments.CheckoutIdempotencyRepository.
@@ -51,6 +63,10 @@ func (r *checkoutIdempotencyRepo) Reserve(ctx context.Context, key idempotency.K
 
 func (r *checkoutIdempotencyRepo) FindByTenantOpKey(ctx context.Context, tenantID, operation, idempotencyKey string) (*idempotency.Key, error) {
 	return r.inner.FindByTenantOpKey(ctx, tenantID, operation, idempotencyKey)
+}
+
+func (r *checkoutIdempotencyRepo) FindByTenantOpResourceID(ctx context.Context, tenantID, operation, resourceID string) (*idempotency.Key, error) {
+	return r.inner.FindByTenantOpResourceID(ctx, tenantID, operation, resourceID)
 }
 
 func (r *checkoutIdempotencyRepo) Commit(ctx context.Context, tenantID, operation, idempotencyKey, resourceID, resourceStatus, resourceURL, externalRef string, updatedAt time.Time) error {

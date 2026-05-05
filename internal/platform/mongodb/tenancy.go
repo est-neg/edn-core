@@ -186,8 +186,15 @@ func ensureIdempotencyKeysIndexes(ctx context.Context, coll *mongo.Collection) e
 				SetExpireAfterSeconds(0).
 				SetPartialFilterExpression(bson.D{{Key: "expirable", Value: true}}).
 				SetName("idx_idempotency_keys_expires_at_ttl"),
-		},
-	}
+		}, {
+			// Non-unique: supports FindByTenantOpResourceID recovery lookup.
+			Keys: bson.D{
+				{Key: "tenant_id", Value: 1},
+				{Key: "operation", Value: 1},
+				{Key: "resource_id", Value: 1},
+			},
+			Options: options.Index().SetName("idx_idempotency_keys_tenant_op_resource_id"),
+		}}
 	if _, err := coll.Indexes().CreateMany(ctx, indexes); err != nil {
 		return fmt.Errorf("ensure idempotency_keys indexes: %w", err)
 	}

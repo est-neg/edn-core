@@ -10,9 +10,20 @@ import (
 type OrderRepository interface {
 	Create(ctx context.Context, order Order) error
 	FindByNSU(ctx context.Context, orderNSU string) (*Order, error)
+	// FindByIntentKey locates an order by its backend-issued checkout_intent_key.
+	// Returns ErrOrderNotFound when no matching order exists.
+	FindByIntentKey(ctx context.Context, intentKey string) (*Order, error)
+	// FindByCustomerDocument returns orders for a given normalized CPF (11 digits),
+	// ordered by created_at descending. Returns empty slice when none found.
+	// Must only be called from admin-authenticated paths.
+	FindByCustomerDocument(ctx context.Context, normalizedDocument string) ([]Order, error)
 	UpdateStatus(ctx context.Context, orderNSU, status string, updatedAt time.Time) error
 	UpdateProviderURL(ctx context.Context, orderNSU, checkoutURL, invoiceSlug string, updatedAt time.Time) error
 	UpdateReceipt(ctx context.Context, orderNSU, receiptURL string, updatedAt time.Time) error
+	// MarkProviderCreateAttempted records the timestamp when a provider checkout-create call was
+	// first attempted for this order. Must be persisted BEFORE the provider call so that recovery
+	// logic can detect partial attempts and avoid unsafe recreation.
+	MarkProviderCreateAttempted(ctx context.Context, orderNSU string, attemptedAt time.Time) error
 }
 
 // PaymentRepository defines persistence operations for payment transactions.

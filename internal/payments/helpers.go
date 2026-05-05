@@ -1,7 +1,9 @@
 package payments
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
 	"regexp"
 	"strings"
@@ -14,6 +16,18 @@ import (
 // GenerateOrderNSU generates a unique, backend-only order identifier.
 func GenerateOrderNSU() string {
 	return uuid.New().String()
+}
+
+// GenerateCheckoutIntentKey generates a high-entropy, opaque resume handle.
+// 24 random bytes encoded as base64url (no padding) gives 32 URL-safe characters.
+// This must never be derivable from PII or business attributes.
+func GenerateCheckoutIntentKey() string {
+	b := make([]byte, 24)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand failure is catastrophic; fall back to uuid-based key.
+		return uuid.New().String()
+	}
+	return base64.RawURLEncoding.EncodeToString(b)
 }
 
 // CalculateEventHash computes the SHA-256 hex digest of the raw webhook body.

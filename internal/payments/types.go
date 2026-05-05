@@ -39,6 +39,8 @@ const (
 )
 
 // CreateCheckoutRequest is the inbound HTTP request for POST /v1/checkout/sessions.
+// Sending a non-empty checkout_intent_key activates create-or-resume semantics:
+// the backend looks up the existing checkout by that handle instead of creating a new one.
 type CreateCheckoutRequest struct {
 	OrganizationSlug string          `json:"organization_slug,omitempty"`
 	TenantSlug       string          `json:"tenant_slug,omitempty"`
@@ -46,7 +48,10 @@ type CreateCheckoutRequest struct {
 	PlanSlug         string          `json:"plan_slug"`
 	BillingCycle     string          `json:"billing_cycle"`
 	Customer         CustomerPayload `json:"customer"`
-	IdempotencyKey   string          `json:"-"`
+	// CheckoutIntentKey is the backend-issued opaque resume handle from a prior 201 response.
+	// When present, the endpoint attempts to resume the existing checkout rather than create a new one.
+	CheckoutIntentKey string `json:"checkout_intent_key,omitempty"`
+	IdempotencyKey    string `json:"-"`
 }
 
 // PlanListQuery is the inbound query contract for GET /v1/plans.
@@ -64,12 +69,24 @@ type CustomerPayload struct {
 	Document string `json:"document"` // CPF — 11 digits, com ou sem pontuação
 }
 
-// CreateCheckoutResponse is the HTTP response for POST /v1/checkout/sessions.
+// CreateCheckoutResponse is the canonical success payload for POST /v1/checkout/sessions.
+// Returned for both created (201) and resumed (200) outcomes.
 type CreateCheckoutResponse struct {
-	OrderNSU    string      `json:"order_nsu"`
-	Status      OrderStatus `json:"status"`
-	CheckoutURL string      `json:"checkout_url"`
-	ExpiresAt   time.Time   `json:"expires_at"`
+	OrderNSU string `json:"order_nsu"`
+	// CheckoutIntentKey is the backend-issued opaque handle clients must persist for resume flows.
+	CheckoutIntentKey string      `json:"checkout_intent_key,omitempty"`
+	Status            OrderStatus `json:"status"`
+	CheckoutURL       string      `json:"checkout_url"`
+	// ExpiresAt is backend-authoritative. Persisted at order creation.
+	ExpiresAt time.Time `json:"expires_at"`
+	// Resumed is an internal flag used by the handler to emit 200 instead of 201.
+	Resumed bool `json:"-"`
+}
+
+// CheckoutErrorResponse is the structured error body for 409 and 503 responses.
+type CheckoutErrorResponse struct {
+	Error     string `json:"error"`
+	ErrorCode string `json:"error_code"`
 }
 
 // OrderStatusResponse is the HTTP response for GET /v1/orders/{orderNSU}/status.
@@ -79,6 +96,52 @@ type OrderStatusResponse struct {
 	SubscriptionStatus SubscriptionStatus `json:"subscription_status,omitempty"`
 	ReceiptURL         string             `json:"receipt_url,omitempty"`
 	PlanSlug           string             `json:"plan_slug"`
+}
+
+// TrackCheckoutRequest is the inbound body for POST /v1/checkout/sessions/track.
+// Uses POST to keep the token out of URL/path/query/logs.
+type TrackCheckoutRequest struct {
+	CheckoutIntentKey string `json:"checkout_intent_key"`
+}
+
+// TrackCheckoutResponse is the public-safe tracking payload for POST /v1/checkout/sessions/track.
+// checkout_url is present only when the order is resumable and has a confirmed provider URL.
+// receipt_url is present only when the order is paid.
+// No customer PII is returned.
+type TrackCheckoutResponse struct {
+	OrderNSU          string      `json:"order_nsu"`
+	CheckoutIntentKey string      `json:"checkout_intent_key"`
+	Status            OrderStatus `json:"status"`
+	PlanSlug          string      `json:"plan_slug"`
+	ExpiresAt         time.Time   `json:"expires_at"`
+	UpdatedAt         time.Time   `json:"updated_at"`
+	Resumable         bool        `json:"resumable"`
+	CheckoutURL       string      `json:"checkout_url,omitempty"`
+	ReceiptURL        string      `json:"receipt_url,omitempty"`
+}
+
+// AdminOrderSearchRequest is the inbound body for POST /api/v1/orders/search.
+// CPF is sent in the body to keep it out of URL/path/query/logs.
+type AdminOrderSearchRequest struct {
+	Document string `json:"document"`
+}
+
+// AdminOrderSummary is one operational order entry in AdminOrderSearchResponse.
+type AdminOrderSummary struct {
+	OrderNSU     string      `json:"order_nsu"`
+	Status       OrderStatus `json:"status"`
+	PlanSlug     string      `json:"plan_slug"`
+	BillingCycle string      `json:"billing_cycle"`
+	AmountCents  int64       `json:"amount_cents"`
+	Currency     string      `json:"currency"`
+	CreatedAt    time.Time   `json:"created_at"`
+	UpdatedAt    time.Time   `json:"updated_at"`
+	ExpiresAt    *time.Time  `json:"expires_at,omitempty"`
+}
+
+// AdminOrderSearchResponse is the payload for POST /api/v1/orders/search.
+type AdminOrderSearchResponse struct {
+	Orders []AdminOrderSummary `json:"orders"`
 }
 
 // PlanResponse is a single plan in GET /v1/plans.

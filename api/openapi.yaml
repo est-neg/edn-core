@@ -26,6 +26,8 @@ tags:
     description: Catálogo de planos disponíveis
   - name: Checkout
     description: Sessões de checkout e status de pedidos
+  - name: Orders
+    description: Consultas operacionais de pedidos (admin)
 
 paths:
 
@@ -403,11 +405,19 @@ paths:
 
   /v1/checkout/sessions:
     post:
-      summary: Criar sessão de checkout
+      summary: Criar ou retomar sessão de checkout
       description: |
-        Cria um pedido e retorna a URL de checkout hospedada pela InfinitePay.
+        Cria um pedido e retorna a URL de checkout hospedada pela InfinitePay **(HTTP 201)**.
+        Se `checkout_intent_key` for enviado no body (handle emitido por um 201 anterior),
+        o backend tenta retomar o checkout existente e retorna **(HTTP 200)** sem criar novo pedido.
+
+        **Semântica create-or-resume:**
+        - Sem `checkout_intent_key`: cria novo pedido → 201.
+        - Com `checkout_intent_key` válido e ativo: retoma → 200.
+        - Com `checkout_intent_key` expirado ou em estado terminal: 409 com `error_code` específico.
+
         O preço é sempre resolvido pelo backend a partir do plano — nunca aceito do cliente.
-        O cliente deve enviar o header `Idempotency-Key` para garantir retry seguro.
+        O header `Idempotency-Key` é obrigatório para retry seguro no caminho de criação.
         `organization_slug` e `tenant_slug` são obrigatórios; o backend resolve o tenant
         em runtime e seleciona o plano publicado em `versioned_plans`.
       tags: [Checkout]
@@ -415,7 +425,7 @@ paths:
         - name: Idempotency-Key
           in: header
           required: true
-          description: Chave opaca do cliente para colapsar retries do mesmo checkout.
+          description: Chave opaca do cliente para colapsar retries do mesmo checkout (caminho de criação).
           schema:
             type: string
             minLength: 1
@@ -432,6 +442,7 @@ paths:
               channel: "web"
               plan_slug: "pro"
               billing_cycle: "monthly"
+              checkout_intent_key: "abc123XYZ_opaque_handle"
               customer:
                 name: "João Costa"
                 email: "joao@example.com"
@@ -444,14 +455,152 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CreateCheckoutResponse'
+        '200':
+          description: Checkout retomado — redirecionar para checkout_url
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateCheckoutResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
-        '409':
-          description: Chave de idempotencia em conflito ou checkout ainda em andamento
         '404':
           description: Organização, tenant ou plano não encontrados
+        '409':
+          description: |
+            Conflito de estado — `error_code` diferencia o caso:
+            - `checkout_idempotency_conflict`: Idempotency-Key já foi usada com payload diferente.
+            - `checkout_in_progress`: outro request está processando o mesmo checkout agora.
+            - `checkout_non_resumable`: checkout_intent_key existe mas não pode ser retomado.
+            - `checkout_expired`: checkout_intent_key expirado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckoutErrorResponse'
         '422':
           description: Requisição inválida
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '502':
+          description: InfinitePay indisponível — o checkout não pôde ser criado junto ao provider
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Estado do provider ambíguo ou recovery necessário
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckoutErrorResponse'
+
+  /v1/checkout/sessions/track:
+    post:
+      summary: Rastrear progresso de checkout
+      description: |
+        Endpoint público para acompanhamento de progresso de um checkout.
+        O `checkout_intent_key` é o token de capacidade — enviado no body para
+        não aparecer em URL, path, query ou logs.
+        Retorna progresso coarse (status, resumível, url de checkout quando aberto).
+        Nunca retorna PII do cliente.
+      tags: [Checkout]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TrackCheckoutRequest'
+            example:
+              checkout_intent_key: "abc123XYZ_opaque_handle"
+      responses:
+        '200':
+          description: Progresso do checkout
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrackCheckoutResponse'
+        '400':
+          description: Body inválido (JSON malformado)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Token desconhecido
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: checkout_intent_key ausente ou vazio
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          description: Erro interno
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Estado do provider ambíguo
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckoutErrorResponse'
+
+  # ── Orders (admin) ──────────────────────────────────────────────────────────
+
+  /api/v1/orders/search:
+    post:
+      summary: Buscar pedidos por CPF (admin)
+      description: |
+        Endpoint operacional para busca de pedidos por CPF.
+        Requer o token de admin no header `Authorization`.
+        O CPF é enviado no body e normalizado server-side.
+        Nunca aparece em URL, query ou logs.
+      tags: [Orders]
+      security:
+        - adminAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminOrderSearchRequest'
+            example:
+              document: "529.982.247-25"
+      responses:
+        '200':
+          description: Lista de pedidos para o CPF informado (pode ser vazia)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminOrderSearchResponse'
+        '400':
+          description: Body inválido (JSON malformado)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          description: CPF inválido — armazenamento não é consultado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          description: Erro interno ao consultar o armazenamento
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /v1/orders/{orderNSU}/status:
     get:
@@ -505,6 +654,15 @@ components:
       description: Token ausente ou inválido
     TooManyRequests:
       description: Rate limit excedido
+      headers:
+        Retry-After:
+          description: Segundos até que o rate limit seja resetado
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
 
   schemas:
 
@@ -749,6 +907,12 @@ components:
         billing_cycle:
           type: string
           enum: [monthly, annual]
+        checkout_intent_key:
+          type: string
+          description: |
+            Handle opaco emitido pelo backend no `checkout_intent_key` de uma resposta 201 anterior.
+            Quando presente, ativa semântica create-or-resume: o backend retoma o checkout existente
+            em vez de criar um novo e retorna 200. Omitir para criar um novo checkout.
         customer:
           $ref: '#/components/schemas/Customer'
 
@@ -776,6 +940,11 @@ components:
         order_nsu:
           type: string
           description: Identificador único do pedido para consulta de status
+        checkout_intent_key:
+          type: string
+          description: |
+            Handle opaco emitido pelo backend. Persista este valor no cliente para acionar
+            semântica create-or-resume em retentativas futuras ou após refresh de página.
         status:
           type: string
           enum: [created, checkout_created, pending, paid, failed, expired, pending_review]
@@ -786,6 +955,22 @@ components:
         expires_at:
           type: string
           format: date-time
+
+    CheckoutErrorResponse:
+      type: object
+      description: Resposta de erro estruturada para 409 e 503.
+      properties:
+        error:
+          type: string
+        error_code:
+          type: string
+          enum:
+            - checkout_idempotency_conflict
+            - checkout_in_progress
+            - checkout_non_resumable
+            - checkout_expired
+            - checkout_recovery_required
+            - provider_state_ambiguous
 
     OrderStatusResponse:
       type: object
@@ -825,3 +1010,90 @@ components:
       properties:
         error:
           type: string
+
+    # ── Tracking & Admin Orders ────────────────────────────────────────────────
+
+    TrackCheckoutRequest:
+      type: object
+      required: [checkout_intent_key]
+      properties:
+        checkout_intent_key:
+          type: string
+          description: Handle opaco emitido pelo backend no momento da criação do checkout.
+          minLength: 1
+
+    TrackCheckoutResponse:
+      type: object
+      description: Progresso coarse do checkout. Sem PII do cliente.
+      properties:
+        order_nsu:
+          type: string
+        checkout_intent_key:
+          type: string
+        status:
+          type: string
+          enum: [created, checkout_created, pending, paid, failed, expired, pending_review]
+        plan_slug:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        resumable:
+          type: boolean
+          description: Verdadeiro quando o checkout ainda pode ser retomado.
+        checkout_url:
+          type: string
+          format: uri
+          description: Presente apenas quando resumable=true e a URL do provider está disponível.
+        receipt_url:
+          type: string
+          format: uri
+          description: Presente apenas quando o pedido está pago.
+
+    AdminOrderSearchRequest:
+      type: object
+      required: [document]
+      properties:
+        document:
+          type: string
+          description: CPF com ou sem pontuação. Normalizado server-side.
+          example: "529.982.247-25"
+
+    AdminOrderSummary:
+      type: object
+      properties:
+        order_nsu:
+          type: string
+        status:
+          type: string
+          enum: [created, checkout_created, pending, paid, failed, expired, pending_review]
+        plan_slug:
+          type: string
+        billing_cycle:
+          type: string
+          enum: [monthly, annual, one_time]
+        amount_cents:
+          type: integer
+        currency:
+          type: string
+          example: BRL
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+
+    AdminOrderSearchResponse:
+      type: object
+      properties:
+        orders:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminOrderSummary'

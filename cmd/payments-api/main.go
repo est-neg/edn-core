@@ -108,16 +108,22 @@ func main() {
 	planSvc := payments.NewPlanQueryService(versionedPlanRepo, organizationRepo, tenantRepo, log)
 	webhookSvc := payments.NewWebhookService(orderRepo, paymentRepo, subRepo, webhookRepo, outboxRepo, storeAdapter, storeAdapter, storeAdapter, infinitePayClient, log)
 
-	handler := payments.NewHandler(checkoutSvc, statusSvc, planSvc, webhookSvc, log)
+	handler := payments.NewHandler(checkoutSvc, statusSvc, planSvc, webhookSvc, cfg.HTTP.AdminAuthToken, log)
 
 	// --- Router ---
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
+	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
 
+	createSessionLimiter := payments.NewCreateSessionRateLimiter(log)
 	r.Get("/v1/plans", handler.ListPlans)
-	r.Post("/v1/checkout/sessions", handler.CreateCheckoutSession)
+	r.Method(http.MethodPost, "/v1/checkout/sessions", createSessionLimiter(http.HandlerFunc(handler.CreateCheckoutSession)))
+	r.Method(http.MethodPost, "/v1/checkout/sessions/track",
+		payments.NewTrackRateLimiter(log)(http.HandlerFunc(handler.TrackCheckoutSession)))
 	r.Get("/v1/orders/{orderNSU}/status", handler.GetOrderStatus)
+	r.Method(http.MethodPost, "/api/v1/orders/search",
+		payments.NewAdminSearchRateLimiter(log)(http.HandlerFunc(handler.SearchOrdersByDocument)))
 	// Webhook route uses exact secret path — NOT a URL parameter
 	r.Post("/v1/webhooks/infinitepay/"+cfg.Payments.WebhookSecretPath, handler.HandleWebhook)
 

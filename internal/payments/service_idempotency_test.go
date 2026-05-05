@@ -41,6 +41,13 @@ func (r *fakeVersionedPlanRepo) ListActiveByTenant(_ context.Context, tenantID, 
 	return []commercialplans.Plan{*r.plan}, nil
 }
 
+func (r *fakeVersionedPlanRepo) FindByUUID(_ context.Context, planUUID string) (*commercialplans.Plan, error) {
+	if r.plan == nil || r.plan.PlanUUID != planUUID {
+		return nil, ErrPlanNotFound
+	}
+	return r.plan, nil
+}
+
 // fakeMultiVersionedPlanRepo is a fake for tests that need multiple plans returned by ListActiveByTenant.
 type fakeMultiVersionedPlanRepo struct {
 	plans []commercialplans.Plan
@@ -74,6 +81,15 @@ func (r *fakeMultiVersionedPlanRepo) ListActiveByTenant(_ context.Context, tenan
 	return out, nil
 }
 
+func (r *fakeMultiVersionedPlanRepo) FindByUUID(_ context.Context, planUUID string) (*commercialplans.Plan, error) {
+	for i := range r.plans {
+		if r.plans[i].PlanUUID == planUUID {
+			return &r.plans[i], nil
+		}
+	}
+	return nil, ErrPlanNotFound
+}
+
 type fakeOrganizationRepo struct {
 	org *organizations.Organization
 }
@@ -97,9 +113,10 @@ func (r *fakeTenantRepo) FindByOrgAndSlug(_ context.Context, organizationID, slu
 }
 
 type fakeOrderRepo struct {
-	orders               map[string]*checkout.Order
-	updateProviderURLErr error
-	updateStatusErr      error
+	orders                         map[string]*checkout.Order
+	updateProviderURLErr           error
+	updateStatusErr                error
+	markProviderCreateAttemptedErr error
 }
 
 func newFakeOrderRepo() *fakeOrderRepo {
@@ -119,6 +136,16 @@ func (r *fakeOrderRepo) GetByNSU(_ context.Context, orderNSU string) (*checkout.
 	}
 	copy := *order
 	return &copy, nil
+}
+
+func (r *fakeOrderRepo) FindByIntentKey(_ context.Context, intentKey string) (*checkout.Order, error) {
+	for _, order := range r.orders {
+		if order.CheckoutIntentKey == intentKey {
+			copy := *order
+			return &copy, nil
+		}
+	}
+	return nil, ErrOrderNotFound
 }
 
 func (r *fakeOrderRepo) UpdateStatus(_ context.Context, orderNSU string, status OrderStatus, updatedAt time.Time) error {
@@ -158,6 +185,33 @@ func (r *fakeOrderRepo) UpdateReceipt(_ context.Context, orderNSU, receiptURL st
 	return nil
 }
 
+func (r *fakeOrderRepo) FindByCustomerDocument(_ context.Context, normalizedDocument string) ([]checkout.Order, error) {
+	var out []checkout.Order
+	for _, o := range r.orders {
+		if o.CustomerDocument == normalizedDocument {
+			out = append(out, *o)
+		}
+	}
+	if out == nil {
+		out = []checkout.Order{}
+	}
+	return out, nil
+}
+
+func (r *fakeOrderRepo) MarkProviderCreateAttempted(_ context.Context, orderNSU string, attemptedAt time.Time) error {
+	if r.markProviderCreateAttemptedErr != nil {
+		return r.markProviderCreateAttemptedErr
+	}
+	order, ok := r.orders[orderNSU]
+	if !ok {
+		return ErrOrderNotFound
+	}
+	t := attemptedAt
+	order.ProviderCreateAttemptedAt = &t
+	order.UpdatedAt = attemptedAt
+	return nil
+}
+
 type fakeProvider struct {
 	calls int
 	resp  InfinitePayCheckoutResponse
@@ -190,7 +244,8 @@ func (fakeStatusCache) SetOrderStatus(context.Context, string, string) error { r
 func (fakeStatusCache) InvalidateOrderStatus(context.Context, string) error  { return nil }
 
 type fakeCheckoutIdempotencyRepo struct {
-	records map[string]*idempotency.Key
+	records   map[string]*idempotency.Key
+	commitErr error
 }
 
 func newFakeCheckoutIdempotencyRepo() *fakeCheckoutIdempotencyRepo {
@@ -220,7 +275,20 @@ func (r *fakeCheckoutIdempotencyRepo) FindByTenantOpKey(_ context.Context, tenan
 	return &copy, nil
 }
 
+func (r *fakeCheckoutIdempotencyRepo) FindByTenantOpResourceID(_ context.Context, tenantID, operation, resourceID string) (*idempotency.Key, error) {
+	for _, record := range r.records {
+		if record.TenantID == tenantID && record.Operation == operation && record.ResourceID == resourceID {
+			copy := *record
+			return &copy, nil
+		}
+	}
+	return nil, idempotency.ErrNotFound
+}
+
 func (r *fakeCheckoutIdempotencyRepo) Commit(_ context.Context, tenantID, operation, idempotencyKey, resourceID, resourceStatus, resourceURL, externalRef string, updatedAt time.Time) error {
+	if r.commitErr != nil {
+		return r.commitErr
+	}
 	record, ok := r.records[idemLookup(tenantID, operation, idempotencyKey)]
 	if !ok {
 		return idempotency.ErrNotFound
@@ -356,7 +424,7 @@ func TestCheckoutService_CreateSession_MissingIdempotencyKeyIsRejected(t *testin
 	}
 }
 
-func TestCheckoutService_CreateSession_ReplaysCommittedSnapshotWhenOrderPersistenceFails(t *testing.T) {
+func TestCheckoutService_CreateSession_PersistFailAfterCommit_ReturnsRecoveryRequiredThenReplaySucceeds(t *testing.T) {
 	provider := &fakeProvider{resp: InfinitePayCheckoutResponse{CheckoutURL: "https://checkout.example/recover", InvoiceSlug: "inv-recover"}}
 	orders := newFakeOrderRepo()
 	orders.updateProviderURLErr = errors.New("write concern timeout")
@@ -393,19 +461,65 @@ func TestCheckoutService_CreateSession_ReplaysCommittedSnapshotWhenOrderPersiste
 	)
 
 	req := validCheckoutRequest()
-	first, err := service.CreateSession(context.Background(), req)
-	if err != nil {
-		t.Fatalf("CreateSession returned error: %v", err)
+	// First call: idempotency commit succeeded but order persist failed → recovery required.
+	_, err := service.CreateSession(context.Background(), req)
+	if !errors.Is(err, ErrCheckoutRecoveryRequired) {
+		t.Fatalf("expected ErrCheckoutRecoveryRequired, got %v", err)
 	}
-	if first.CheckoutURL != "https://checkout.example/recover" {
-		t.Fatalf("expected checkout URL to come from provider snapshot, got %q", first.CheckoutURL)
-	}
+	// Same-key retry: replays from idempotency snapshot without calling the provider again.
 	second, err := service.CreateSession(context.Background(), req)
 	if err != nil {
 		t.Fatalf("replay CreateSession returned error: %v", err)
 	}
-	if second.CheckoutURL != first.CheckoutURL {
-		t.Fatalf("expected replayed checkout URL %q, got %q", first.CheckoutURL, second.CheckoutURL)
+	if second.CheckoutURL != "https://checkout.example/recover" {
+		t.Fatalf("expected checkout URL from idempotency snapshot, got %q", second.CheckoutURL)
+	}
+	if provider.calls != 1 {
+		t.Fatalf("expected provider to be called once, got %d", provider.calls)
+	}
+}
+
+func TestCheckoutService_CreateSession_BothCommitAndPersistFail_ReturnsProviderStateAmbiguous(t *testing.T) {
+	provider := &fakeProvider{resp: InfinitePayCheckoutResponse{CheckoutURL: "https://checkout.example/ambiguous", InvoiceSlug: "inv-ambiguous"}}
+	orders := newFakeOrderRepo()
+	orders.updateProviderURLErr = errors.New("write concern timeout")
+	orders.updateStatusErr = errors.New("write concern timeout")
+	idempotencyRepo := newFakeCheckoutIdempotencyRepo()
+	idempotencyRepo.commitErr = errors.New("mongo write timeout")
+	service := NewCheckoutService(
+		&fakeVersionedPlanRepo{plan: &commercialplans.Plan{
+			ID:              primitive.NewObjectID(),
+			PlanUUID:        "plan-basic",
+			OrganizationID:  "org-001",
+			TenantID:        "tenant-001",
+			Slug:            "basic",
+			Version:         1,
+			Name:            "Plano Basic",
+			BillingCycle:    commercialplans.BillingCycleMonthly,
+			PriceCents:      9900,
+			Currency:        "BRL",
+			Active:          true,
+			MaxInstallments: 1,
+			Channel:         commercialplans.ChannelAll,
+			ValidFrom:       time.Now().UTC().Add(-time.Hour),
+			CreatedAt:       time.Now().UTC(),
+			UpdatedAt:       time.Now().UTC(),
+		}},
+		&fakeOrganizationRepo{org: &organizations.Organization{OrgUUID: "org-001", Slug: "acme", Active: true}},
+		&fakeTenantRepo{tenant: &tenants.Tenant{TenantUUID: "tenant-001", OrganizationID: "org-001", Slug: "clinic", Active: true}},
+		orders,
+		idempotencyRepo,
+		provider,
+		fakeLockManager{},
+		fakeStatusCache{},
+		config.PaymentsConfig{},
+		zap.NewNop(),
+	)
+
+	req := validCheckoutRequest()
+	_, err := service.CreateSession(context.Background(), req)
+	if !errors.Is(err, ErrProviderStateAmbiguous) {
+		t.Fatalf("expected ErrProviderStateAmbiguous, got %v", err)
 	}
 	if provider.calls != 1 {
 		t.Fatalf("expected provider to be called once, got %d", provider.calls)

@@ -48,6 +48,23 @@ func (r *mongoRepository) FindByTenantOpKey(ctx context.Context, tenantID, opera
 	return &key, nil
 }
 
+func (r *mongoRepository) FindByTenantOpResourceID(ctx context.Context, tenantID, operation, resourceID string) (*Key, error) {
+	filter := bson.D{
+		{Key: "tenant_id", Value: tenantID},
+		{Key: "operation", Value: operation},
+		{Key: "resource_id", Value: resourceID},
+	}
+	var key Key
+	err := r.coll.FindOne(ctx, filter).Decode(&key)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("find idempotency key by resource id: %w", err)
+	}
+	return &key, nil
+}
+
 func (r *mongoRepository) Commit(ctx context.Context, tenantID, operation, idempotencyKey, resourceID, resourceStatus, resourceURL, externalRef string, updatedAt time.Time) error {
 	filter := bson.D{
 		{Key: "tenant_id", Value: tenantID},

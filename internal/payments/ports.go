@@ -25,15 +25,27 @@ type TenantRepository interface {
 type VersionedPlanRepository interface {
 	FindSellableByTenantSlug(ctx context.Context, tenantID, slug, billingCycle, channel string, at time.Time) (*commercialplans.Plan, error)
 	ListActiveByTenant(ctx context.Context, tenantID, channel string) ([]commercialplans.Plan, error)
+	// FindByUUID returns the plan identified by its stable plan_uuid.
+	// Used during checkout recovery to reconstruct provider request state from a persisted order.
+	FindByUUID(ctx context.Context, planUUID string) (*commercialplans.Plan, error)
 }
 
 // OrderRepository is the write/read port for checkout orders.
 type OrderRepository interface {
 	Create(ctx context.Context, order checkout.Order) error
 	GetByNSU(ctx context.Context, orderNSU string) (*checkout.Order, error)
+	// FindByIntentKey locates a checkout order by its backend-issued checkout_intent_key.
+	// Returns ErrOrderNotFound when no matching order exists.
+	FindByIntentKey(ctx context.Context, intentKey string) (*checkout.Order, error)
+	// FindByCustomerDocument returns orders for a given normalized CPF (11 digits).
+	// Returns empty slice when none found. Must only be called from admin-authenticated paths.
+	FindByCustomerDocument(ctx context.Context, normalizedDocument string) ([]checkout.Order, error)
 	UpdateStatus(ctx context.Context, orderNSU string, status OrderStatus, updatedAt time.Time) error
 	UpdateProviderURL(ctx context.Context, orderNSU, checkoutURL, invoiceSlug string, updatedAt time.Time) error
 	UpdateReceipt(ctx context.Context, orderNSU, receiptURL string, updatedAt time.Time) error
+	// MarkProviderCreateAttempted persists the timestamp of a provider-create attempt on the order
+	// BEFORE the provider call. Enables safe recovery without blind recreation.
+	MarkProviderCreateAttempted(ctx context.Context, orderNSU string, attemptedAt time.Time) error
 }
 
 // PaymentRepository is the write/read port for payments.
@@ -94,6 +106,7 @@ type StatusCache interface {
 type CheckoutIdempotencyRepository interface {
 	Reserve(ctx context.Context, key idempotency.Key) error
 	FindByTenantOpKey(ctx context.Context, tenantID, operation, idempotencyKey string) (*idempotency.Key, error)
+	FindByTenantOpResourceID(ctx context.Context, tenantID, operation, resourceID string) (*idempotency.Key, error)
 	Commit(ctx context.Context, tenantID, operation, idempotencyKey, resourceID, resourceStatus, resourceURL, externalRef string, updatedAt time.Time) error
 	Fail(ctx context.Context, tenantID, operation, idempotencyKey string, updatedAt time.Time) error
 }

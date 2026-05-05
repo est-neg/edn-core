@@ -62,6 +62,20 @@ func ensureOrdersIndexes(ctx context.Context, coll *mongo.Collection) error {
 			Options: options.Index().SetUnique(true).SetName("idx_orders_order_nsu_unique"),
 		},
 		{
+			// Unique sparse index for the backend-issued resume handle.
+			// Sparse so that legacy documents without the field are not rejected.
+			Keys:    bson.D{{Key: "checkout_intent_key", Value: 1}},
+			Options: options.Index().SetUnique(true).SetSparse(true).SetName("idx_orders_checkout_intent_key_unique"),
+		},
+		{
+			// Supports expiry and recovery scans without touching the full collection.
+			Keys: bson.D{
+				{Key: "status", Value: 1},
+				{Key: "expires_at", Value: 1},
+			},
+			Options: options.Index().SetSparse(true).SetName("idx_orders_status_expires_at"),
+		},
+		{
 			Keys:    bson.D{{Key: "customer_email", Value: 1}},
 			Options: options.Index().SetName("idx_orders_customer_email"),
 		},
@@ -80,6 +94,11 @@ func ensureOrdersIndexes(ctx context.Context, coll *mongo.Collection) error {
 				{Key: "created_at", Value: -1},
 			},
 			Options: options.Index().SetName("idx_orders_tenant_status_created_at"),
+		},
+		{
+			// Supports admin document search. Sparse so legacy orders without CPF are not indexed.
+			Keys:    bson.D{{Key: "customer_document", Value: 1}},
+			Options: options.Index().SetSparse(true).SetName("idx_orders_customer_document"),
 		},
 	}
 	if _, err := coll.Indexes().CreateMany(ctx, indexes); err != nil {
