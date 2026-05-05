@@ -325,11 +325,13 @@ Não é necessário rodar o backend localmente para desenvolver o frontend.
 | `429` | Rate limit excedido | Aguardar `Retry-After` segundos e tentar novamente |
 | `500` | Erro interno inesperado (banco de dados indisponível etc.) | Mostrar mensagem genérica; logar no frontend para diagnóstico |
 | `502` | InfinitePay indisponível — o checkout não pôde ser criado | Mostrar mensagem genérica e tentar novamente após alguns segundos |
-| `503` `checkout_recovery_required` | Provider URL capturada mas pedido não foi persistido; retry seguro com a mesma Idempotency-Key. Também retornado pelo `/track` se o recovery é realizado com sucesso mas o re-read do pedido falha | Aguardar brevemente e retentar com a mesma Idempotency-Key |
-| `503` `provider_state_ambiguous` | Estado do provider incerto após falha parcial; não é seguro recriar o checkout | Usar `checkout_intent_key` para rastrear/retomar depois |
+| `503` `checkout_recovery_required` | Provider URL capturada mas pedido não foi persistido; retry seguro com a mesma Idempotency-Key. Também retornado pelo `/track` se o recovery é realizado com sucesso mas o re-read do pedido falha | Se a resposta incluir `checkout_intent_key` e `order_nsu`, persista-os e continue pelo `/track`; caso contrário, aguarde brevemente e retente com a mesma Idempotency-Key |
+| `503` `provider_state_ambiguous` | Estado do provider incerto após falha parcial; não é seguro recriar o checkout nem inventar uma URL de pagamento | Se a resposta incluir `checkout_intent_key` e `order_nsu`, persista-os e use `/v1/checkout/sessions/track` para retomar; se não incluir, trate como indisponibilidade transitória e retente conforme sua política |
 
 > **400 vs 422:** `400` é retornado quando o corpo JSON não pode ser parseado. `422` é retornado quando o JSON é válido mas um campo tem valor inválido ou está ausente (e.g. CPF inválido, email malformado, campo obrigatório vazio).
 > **500 vs 502 vs 503:** `500` indica erro interno do backend. `502` indica que a InfinitePay estava indisponível no momento da criação do checkout. `503` indica que o estado do checkout ficou ambíguo (`provider_state_ambiguous`) ou que o recovery foi realizado mas o estado atualizado não pôde ser lido (`checkout_recovery_required`) — retentar com a mesma `Idempotency-Key` é seguro para `checkout_recovery_required`.
+
+Quando um `503` vier com `checkout_intent_key`, o frontend deve persistir esse valor imediatamente e trocar de estratégia: em vez de tentar inventar o link de pagamento, deve chamar `/v1/checkout/sessions/track` até receber `checkout_url` confirmado ou um estado terminal.
 
 ---
 

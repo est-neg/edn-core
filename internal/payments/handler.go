@@ -35,6 +35,16 @@ func NewHandler(
 	return &Handler{checkout: checkout, status: status, plans: plans, webhook: webhook, authToken: adminAuthToken, log: log}
 }
 
+func checkoutErrorResponse(err error, fallback CheckoutErrorResponse) CheckoutErrorResponse {
+	resp := fallback
+	var continuation *checkoutContinuationError
+	if errors.As(err, &continuation) {
+		resp.OrderNSU = continuation.orderNSU
+		resp.CheckoutIntentKey = continuation.checkoutIntentKey
+	}
+	return resp
+}
+
 // authenticate performs constant-time comparison of the Authorization header.
 func (h *Handler) authenticate(r *http.Request) bool {
 	got := r.Header.Get("Authorization")
@@ -112,17 +122,17 @@ func (h *Handler) CreateCheckoutSession(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		if errors.Is(err, ErrCheckoutRecoveryRequired) {
-			writeJSON(w, http.StatusServiceUnavailable, CheckoutErrorResponse{
+			writeJSON(w, http.StatusServiceUnavailable, checkoutErrorResponse(err, CheckoutErrorResponse{
 				Error:     "checkout recovery required",
 				ErrorCode: ErrCodeCheckoutRecoveryRequired,
-			})
+			}))
 			return
 		}
 		if errors.Is(err, ErrProviderStateAmbiguous) {
-			writeJSON(w, http.StatusServiceUnavailable, CheckoutErrorResponse{
+			writeJSON(w, http.StatusServiceUnavailable, checkoutErrorResponse(err, CheckoutErrorResponse{
 				Error:     "provider state ambiguous",
 				ErrorCode: ErrCodeProviderStateAmbiguous,
-			})
+			}))
 			return
 		}
 		if errors.Is(err, ErrPlanNotFound) || errors.Is(err, ErrPlanInactive) {
@@ -238,10 +248,10 @@ func (h *Handler) TrackCheckoutSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, ErrProviderStateAmbiguous) {
-			writeJSON(w, http.StatusServiceUnavailable, CheckoutErrorResponse{
+			writeJSON(w, http.StatusServiceUnavailable, checkoutErrorResponse(err, CheckoutErrorResponse{
 				Error:     "provider state ambiguous",
 				ErrorCode: ErrCodeProviderStateAmbiguous,
-			})
+			}))
 			return
 		}
 		h.log.Error("track checkout session failed", zap.Error(err))
@@ -273,10 +283,10 @@ func (h *Handler) TrackCheckoutSession(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		} else if errors.Is(recErr, ErrProviderStateAmbiguous) {
-			writeJSON(w, http.StatusServiceUnavailable, CheckoutErrorResponse{
+			writeJSON(w, http.StatusServiceUnavailable, checkoutErrorResponse(recErr, CheckoutErrorResponse{
 				Error:     "provider state ambiguous",
 				ErrorCode: ErrCodeProviderStateAmbiguous,
-			})
+			}))
 			return
 		} else {
 			// Non-ambiguous recovery failure (e.g. expired, non-resumable under lock):

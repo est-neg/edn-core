@@ -1,6 +1,9 @@
 package payments
 
-import "errors"
+import (
+	"errors"
+	"strings"
+)
 
 var (
 	ErrPlanNotFound         = errors.New("payments: plan not found")
@@ -30,6 +33,36 @@ var (
 	// which provider session is canonical. Maps to 503.
 	ErrProviderStateAmbiguous = errors.New("payments: provider state ambiguous")
 )
+
+type checkoutContinuationError struct {
+	err               error
+	orderNSU          string
+	checkoutIntentKey string
+}
+
+func (e *checkoutContinuationError) Error() string {
+	return e.err.Error()
+}
+
+func (e *checkoutContinuationError) Unwrap() error {
+	return e.err
+}
+
+func newCheckoutContinuationError(err error, orderNSU, checkoutIntentKey string) error {
+	if err == nil {
+		return nil
+	}
+	orderNSU = strings.TrimSpace(orderNSU)
+	checkoutIntentKey = strings.TrimSpace(checkoutIntentKey)
+	if orderNSU == "" && checkoutIntentKey == "" {
+		return err
+	}
+	return &checkoutContinuationError{
+		err:               err,
+		orderNSU:          orderNSU,
+		checkoutIntentKey: checkoutIntentKey,
+	}
+}
 
 // Stable error_code values returned in API responses for 409 and 503.
 const (

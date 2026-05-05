@@ -216,14 +216,14 @@ func (s *CheckoutService) CreateSession(ctx context.Context, req CreateCheckoutR
 		// Nothing durable: provider URL is in neither idempotency snapshot nor order.
 		s.log.Error("checkout persist failed: both idempotency commit and order persist failed",
 			zap.String("order_nsu", orderNSU), zap.Error(commitErr))
-		return CreateCheckoutResponse{}, ErrProviderStateAmbiguous
+		return CreateCheckoutResponse{}, checkoutContinuationErrorForSession(ErrProviderStateAmbiguous, orderNSU, intentKey)
 	}
 	if persistErr != nil {
 		// Idempotency commit succeeded (URL captured) but order persist failed.
 		// A same-key retry can replay from the idempotency snapshot and repair the order.
 		s.log.Error("checkout persist failed: order not updated after successful provider and idempotency commit",
 			zap.String("order_nsu", orderNSU), zap.Error(persistErr))
-		return CreateCheckoutResponse{}, ErrCheckoutRecoveryRequired
+		return CreateCheckoutResponse{}, checkoutContinuationErrorForSession(ErrCheckoutRecoveryRequired, orderNSU, intentKey)
 	}
 	if commitErr != nil {
 		// Order persist succeeded but idempotency commit failed.
@@ -329,7 +329,7 @@ func (s *CheckoutService) recoverCheckoutSession(ctx context.Context, firstRead 
 	// Re-read under lock — a concurrent create may have already persisted the URL.
 	order, err := s.orders.GetByNSU(ctx, firstRead.OrderNSU)
 	if err != nil {
-		return CreateCheckoutResponse{}, ErrProviderStateAmbiguous
+		return CreateCheckoutResponse{}, checkoutContinuationErrorForOrder(ErrProviderStateAmbiguous, firstRead)
 	}
 
 	now := time.Now().UTC()
@@ -367,7 +367,7 @@ func (s *CheckoutService) recoverCheckoutSession(ctx context.Context, firstRead 
 			zap.String("tenant_id", order.TenantID),
 			zap.String("metric", "checkout_recovery_ambiguous"),
 		)
-		return CreateCheckoutResponse{}, ErrProviderStateAmbiguous
+		return CreateCheckoutResponse{}, checkoutContinuationErrorForOrder(ErrProviderStateAmbiguous, order)
 	}
 
 	// If a provider-create attempt was previously recorded but no URL was persisted,
@@ -382,7 +382,7 @@ func (s *CheckoutService) recoverCheckoutSession(ctx context.Context, firstRead 
 			zap.String("order_nsu", order.OrderNSU),
 			zap.String("metric", "checkout_recovery_ambiguous"),
 		)
-		return CreateCheckoutResponse{}, ErrProviderStateAmbiguous
+		return CreateCheckoutResponse{}, checkoutContinuationErrorForOrder(ErrProviderStateAmbiguous, order)
 	}
 
 	plan, err := s.versionedPlans.FindByUUID(ctx, order.PlanID)
@@ -393,7 +393,7 @@ func (s *CheckoutService) recoverCheckoutSession(ctx context.Context, firstRead 
 			zap.Error(err),
 			zap.String("metric", "checkout_recovery_ambiguous"),
 		)
-		return CreateCheckoutResponse{}, ErrProviderStateAmbiguous
+		return CreateCheckoutResponse{}, checkoutContinuationErrorForOrder(ErrProviderStateAmbiguous, order)
 	}
 
 	if plan.PriceCents != order.AmountCents {
@@ -403,7 +403,7 @@ func (s *CheckoutService) recoverCheckoutSession(ctx context.Context, firstRead 
 			zap.Int64("order_amount_cents", order.AmountCents),
 			zap.String("metric", "checkout_recovery_ambiguous"),
 		)
-		return CreateCheckoutResponse{}, ErrProviderStateAmbiguous
+		return CreateCheckoutResponse{}, checkoutContinuationErrorForOrder(ErrProviderStateAmbiguous, order)
 	}
 
 	providerReq := InfinitePayCheckoutRequest{
@@ -428,7 +428,7 @@ func (s *CheckoutService) recoverCheckoutSession(ctx context.Context, firstRead 
 			zap.Error(err),
 			zap.String("metric", "checkout_recovery_ambiguous"),
 		)
-		return CreateCheckoutResponse{}, ErrProviderStateAmbiguous
+		return CreateCheckoutResponse{}, checkoutContinuationErrorForOrder(ErrProviderStateAmbiguous, order)
 	}
 
 	updatedAt := time.Now().UTC()
@@ -438,7 +438,7 @@ func (s *CheckoutService) recoverCheckoutSession(ctx context.Context, firstRead 
 			zap.Error(err),
 			zap.String("metric", "checkout_recovery_ambiguous"),
 		)
-		return CreateCheckoutResponse{}, ErrProviderStateAmbiguous
+		return CreateCheckoutResponse{}, checkoutContinuationErrorForOrder(ErrProviderStateAmbiguous, order)
 	}
 
 	s.statusCache.SetOrderStatus(ctx, order.OrderNSU, string(OrderStatusCheckoutCreated)) //nolint:errcheck
@@ -472,7 +472,7 @@ func (s *CheckoutService) recoverFromIdempotencySnapshot(ctx context.Context, or
 			zap.Error(err),
 			zap.String("metric", "checkout_recovery_ambiguous"),
 		)
-		return CreateCheckoutResponse{}, ErrProviderStateAmbiguous
+		return CreateCheckoutResponse{}, checkoutContinuationErrorForOrder(ErrProviderStateAmbiguous, order)
 	}
 	if record.Status != idempotency.StatusCommitted || record.ResourceURL == "" {
 		s.log.Warn("recovery: idempotency snapshot not committed or missing durable URL",
@@ -480,7 +480,7 @@ func (s *CheckoutService) recoverFromIdempotencySnapshot(ctx context.Context, or
 			zap.String("snapshot_status", record.Status),
 			zap.String("metric", "checkout_recovery_ambiguous"),
 		)
-		return CreateCheckoutResponse{}, ErrProviderStateAmbiguous
+		return CreateCheckoutResponse{}, checkoutContinuationErrorForOrder(ErrProviderStateAmbiguous, order)
 	}
 	// Repair the order from the snapshot — no new provider call.
 	updatedAt := time.Now().UTC()
@@ -490,7 +490,7 @@ func (s *CheckoutService) recoverFromIdempotencySnapshot(ctx context.Context, or
 			zap.Error(err),
 			zap.String("metric", "checkout_recovery_ambiguous"),
 		)
-		return CreateCheckoutResponse{}, ErrProviderStateAmbiguous
+		return CreateCheckoutResponse{}, checkoutContinuationErrorForOrder(ErrProviderStateAmbiguous, order)
 	}
 	s.statusCache.SetOrderStatus(ctx, order.OrderNSU, string(OrderStatusCheckoutCreated)) //nolint:errcheck
 	s.log.Info("checkout recovered from idempotency snapshot",
@@ -506,6 +506,17 @@ func (s *CheckoutService) recoverFromIdempotencySnapshot(ctx context.Context, or
 		ExpiresAt:         order.ExpiresAt,
 		Resumed:           true,
 	}, nil
+}
+
+func checkoutContinuationErrorForOrder(err error, order *checkout.Order) error {
+	if order == nil {
+		return err
+	}
+	return newCheckoutContinuationError(err, order.OrderNSU, order.CheckoutIntentKey)
+}
+
+func checkoutContinuationErrorForSession(err error, orderNSU, checkoutIntentKey string) error {
+	return newCheckoutContinuationError(err, orderNSU, checkoutIntentKey)
 }
 
 func (s *CheckoutService) replayExistingSession(ctx context.Context, tenantID, idempotencyKey, requestHash string) (CreateCheckoutResponse, error) {
@@ -533,7 +544,7 @@ func (s *CheckoutService) replayExistingSession(ctx context.Context, tenantID, i
 	if strings.TrimSpace(order.ProviderCheckoutURL) == "" {
 		if existing.ResourceURL == "" {
 			if order.ProviderCreateAttemptedAt != nil {
-				return CreateCheckoutResponse{}, ErrProviderStateAmbiguous
+				return CreateCheckoutResponse{}, checkoutContinuationErrorForOrder(ErrProviderStateAmbiguous, order)
 			}
 			return CreateCheckoutResponse{}, ErrCheckoutInProgress
 		}
@@ -599,7 +610,7 @@ func (s *CheckoutService) reserveOrReplayCheckout(ctx context.Context, scope res
 		if strings.TrimSpace(order.ProviderCheckoutURL) == "" {
 			if existing.ResourceURL == "" {
 				if order.ProviderCreateAttemptedAt != nil {
-					return "", nil, ErrProviderStateAmbiguous
+					return "", nil, checkoutContinuationErrorForOrder(ErrProviderStateAmbiguous, order)
 				}
 				return "", nil, ErrCheckoutInProgress
 			}

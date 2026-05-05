@@ -85,8 +85,10 @@ type CreateCheckoutResponse struct {
 
 // CheckoutErrorResponse is the structured error body for 409 and 503 responses.
 type CheckoutErrorResponse struct {
-	Error     string `json:"error"`
-	ErrorCode string `json:"error_code"`
+	Error             string `json:"error"`
+	ErrorCode         string `json:"error_code"`
+	OrderNSU          string `json:"order_nsu,omitempty"`
+	CheckoutIntentKey string `json:"checkout_intent_key,omitempty"`
 }
 
 // OrderStatusResponse is the HTTP response for GET /v1/orders/{orderNSU}/status.

@@ -2,7 +2,9 @@ package payments
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -165,6 +167,43 @@ func TestCreateCheckoutSession_ProviderAmbiguous_Returns503(t *testing.T) {
 	}
 }
 
+func TestCreateCheckoutSession_ProviderAmbiguous_IncludesResumeContextWhenAvailable(t *testing.T) {
+	orders := newFakeOrderRepo()
+	orders.updateProviderURLErr = errors.New("write concern timeout")
+	orders.updateStatusErr = errors.New("write concern timeout")
+	svc := newResumeTestService(orders, InfinitePayCheckoutResponse{
+		CheckoutURL: "https://checkout.example/ambiguous",
+		InvoiceSlug: "inv-ambiguous",
+	}, nil)
+	svc.idempotency.(*fakeCheckoutIdempotencyRepo).commitErr = errors.New("mongo write timeout")
+	h := newCheckoutHandlerWithService(svc)
+
+	rr := postCheckout(t, h, validCheckoutRequest(), "idem-ambiguous-context-key")
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var body CheckoutErrorResponse
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.ErrorCode != ErrCodeProviderStateAmbiguous {
+		t.Fatalf("expected error_code %q, got %q", ErrCodeProviderStateAmbiguous, body.ErrorCode)
+	}
+	if body.OrderNSU == "" {
+		t.Fatal("expected non-empty order_nsu in ambiguous 503 response")
+	}
+	if body.CheckoutIntentKey == "" {
+		t.Fatal("expected non-empty checkout_intent_key in ambiguous 503 response")
+	}
+	order, err := orders.GetByNSU(context.Background(), body.OrderNSU)
+	if err != nil {
+		t.Fatalf("GetByNSU returned error: %v", err)
+	}
+	if order.CheckoutIntentKey != body.CheckoutIntentKey {
+		t.Fatalf("expected checkout_intent_key %q, got %q", order.CheckoutIntentKey, body.CheckoutIntentKey)
+	}
+}
+
 // TestCreateCheckoutSession_NonResumable_Returns409 verifies that a
 // checkout_non_resumable state returns a distinct 409 error_code.
 func TestCreateCheckoutSession_NonResumable_Returns409(t *testing.T) {
@@ -202,5 +241,41 @@ func TestCreateCheckoutSession_RecoveryRequired_Returns503(t *testing.T) {
 	}
 	if body.ErrorCode != ErrCodeCheckoutRecoveryRequired {
 		t.Errorf("expected error_code %q, got %q", ErrCodeCheckoutRecoveryRequired, body.ErrorCode)
+	}
+}
+
+func TestCreateCheckoutSession_RecoveryRequired_IncludesResumeContextWhenAvailable(t *testing.T) {
+	orders := newFakeOrderRepo()
+	orders.updateProviderURLErr = errors.New("write concern timeout")
+	orders.updateStatusErr = errors.New("write concern timeout")
+	svc := newResumeTestService(orders, InfinitePayCheckoutResponse{
+		CheckoutURL: "https://checkout.example/recover",
+		InvoiceSlug: "inv-recover",
+	}, nil)
+	h := newCheckoutHandlerWithService(svc)
+
+	rr := postCheckout(t, h, validCheckoutRequest(), "idem-recovery-context-key")
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var body CheckoutErrorResponse
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.ErrorCode != ErrCodeCheckoutRecoveryRequired {
+		t.Fatalf("expected error_code %q, got %q", ErrCodeCheckoutRecoveryRequired, body.ErrorCode)
+	}
+	if body.OrderNSU == "" {
+		t.Fatal("expected non-empty order_nsu in recovery-required 503 response")
+	}
+	if body.CheckoutIntentKey == "" {
+		t.Fatal("expected non-empty checkout_intent_key in recovery-required 503 response")
+	}
+	order, err := orders.GetByNSU(context.Background(), body.OrderNSU)
+	if err != nil {
+		t.Fatalf("GetByNSU returned error: %v", err)
+	}
+	if order.CheckoutIntentKey != body.CheckoutIntentKey {
+		t.Fatalf("expected checkout_intent_key %q, got %q", order.CheckoutIntentKey, body.CheckoutIntentKey)
 	}
 }

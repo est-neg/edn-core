@@ -466,6 +466,23 @@ func TestCheckoutService_CreateSession_PersistFailAfterCommit_ReturnsRecoveryReq
 	if !errors.Is(err, ErrCheckoutRecoveryRequired) {
 		t.Fatalf("expected ErrCheckoutRecoveryRequired, got %v", err)
 	}
+	var continuation *checkoutContinuationError
+	if !errors.As(err, &continuation) {
+		t.Fatalf("expected recovery-required error to carry continuation context, got %T", err)
+	}
+	if continuation.orderNSU == "" {
+		t.Fatal("expected non-empty order_nsu on recovery-required error")
+	}
+	if continuation.checkoutIntentKey == "" {
+		t.Fatal("expected non-empty checkout_intent_key on recovery-required error")
+	}
+	order, orderErr := orders.GetByNSU(context.Background(), continuation.orderNSU)
+	if orderErr != nil {
+		t.Fatalf("GetByNSU returned error: %v", orderErr)
+	}
+	if order.CheckoutIntentKey != continuation.checkoutIntentKey {
+		t.Fatalf("expected checkout_intent_key %q, got %q", order.CheckoutIntentKey, continuation.checkoutIntentKey)
+	}
 	// Same-key retry: replays from idempotency snapshot without calling the provider again.
 	second, err := service.CreateSession(context.Background(), req)
 	if err != nil {
@@ -520,6 +537,23 @@ func TestCheckoutService_CreateSession_BothCommitAndPersistFail_ReturnsProviderS
 	_, err := service.CreateSession(context.Background(), req)
 	if !errors.Is(err, ErrProviderStateAmbiguous) {
 		t.Fatalf("expected ErrProviderStateAmbiguous, got %v", err)
+	}
+	var continuation *checkoutContinuationError
+	if !errors.As(err, &continuation) {
+		t.Fatalf("expected ambiguous error to carry continuation context, got %T", err)
+	}
+	if continuation.orderNSU == "" {
+		t.Fatal("expected non-empty order_nsu on ambiguous error")
+	}
+	if continuation.checkoutIntentKey == "" {
+		t.Fatal("expected non-empty checkout_intent_key on ambiguous error")
+	}
+	order, orderErr := orders.GetByNSU(context.Background(), continuation.orderNSU)
+	if orderErr != nil {
+		t.Fatalf("GetByNSU returned error: %v", orderErr)
+	}
+	if order.CheckoutIntentKey != continuation.checkoutIntentKey {
+		t.Fatalf("expected checkout_intent_key %q, got %q", order.CheckoutIntentKey, continuation.checkoutIntentKey)
 	}
 	if provider.calls != 1 {
 		t.Fatalf("expected provider to be called once, got %d", provider.calls)

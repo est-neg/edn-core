@@ -487,7 +487,10 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
-          description: Estado do provider ambíguo ou recovery necessário
+          description: |
+            Estado do provider ambíguo ou recovery necessário.
+            Quando o checkout backend já existe, a resposta também pode incluir
+            `order_nsu` e `checkout_intent_key` para o cliente continuar via `/v1/checkout/sessions/track`.
           content:
             application/json:
               schema:
@@ -971,6 +974,12 @@ components:
             - checkout_expired
             - checkout_recovery_required
             - provider_state_ambiguous
+        order_nsu:
+          type: string
+          description: Identificador do pedido já criado, quando o backend consegue correlacionar a falha com um checkout existente.
+        checkout_intent_key:
+          type: string
+          description: Handle opaco já emitido para o checkout existente; persista este valor para usar `/v1/checkout/sessions/track` após um 503.
 
     OrderStatusResponse:
       type: object
