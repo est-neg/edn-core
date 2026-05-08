@@ -2,6 +2,7 @@ package payments
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 )
 
@@ -15,6 +16,11 @@ var (
 	ErrInvalidRequest       = errors.New("payments: invalid request")
 	ErrCheckoutConflict     = errors.New("payments: checkout idempotency conflict")
 	ErrCheckoutInProgress   = errors.New("payments: checkout already in progress")
+
+	// ErrCheckoutAlreadyOpen is returned on public create when an active open order
+	// with the same tenant+CPF+plan fingerprint already exists. No session data is
+	// leaked. Maps to 409.
+	ErrCheckoutAlreadyOpen = errors.New("payments: checkout already open")
 
 	// ErrCheckoutNonResumable is returned when the referenced checkout exists but
 	// is in a terminal or otherwise non-resumable state. Maps to 409.
@@ -64,11 +70,34 @@ func newCheckoutContinuationError(err error, orderNSU, checkoutIntentKey string)
 	}
 }
 
+// ProviderCreateRejectedError is returned by InfinitePayClient.CreateCheckout when the
+// provider responds with a deterministic rejection status (400, 401, 402, 403, 404, 422).
+// Callers that detect this error must terminalize the in-flight order rather than leaving it open.
+type ProviderCreateRejectedError struct {
+	StatusCode int
+}
+
+func (e *ProviderCreateRejectedError) Error() string {
+	return fmt.Sprintf("payments: provider rejected checkout creation with status %d", e.StatusCode)
+}
+
+// isDeterministicProviderCreateStatus reports whether an HTTP status from a provider
+// checkout-create call represents a permanent, non-retriable rejection.
+// 408, 429, and 5xx are excluded — they are transient or ambiguous.
+func isDeterministicProviderCreateStatus(code int) bool {
+	switch code {
+	case 400, 401, 402, 403, 404, 422:
+		return true
+	}
+	return false
+}
+
 // Stable error_code values returned in API responses for 409 and 503.
 const (
 	// Technical idempotency / concurrency conflicts — not resume-state errors.
 	ErrCodeCheckoutIdempotencyConflict = "checkout_idempotency_conflict"
 	ErrCodeCheckoutInProgress          = "checkout_in_progress"
+	ErrCodeCheckoutAlreadyOpen         = "checkout_already_open"
 
 	// Resume-state conflicts.
 	ErrCodeCheckoutNonResumable = "checkout_non_resumable"

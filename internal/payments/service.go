@@ -90,14 +90,14 @@ func NewCheckoutService(
 // When checkout_intent_key is provided, create-or-resume semantics are applied:
 // an active, non-expired order is returned with 200 instead of creating a new one.
 func (s *CheckoutService) CreateSession(ctx context.Context, req CreateCheckoutRequest) (CreateCheckoutResponse, error) {
+	// Resume path: checkout_intent_key provided → bypass plan/tenant resolution and idempotency key requirement.
+	if intentKey := strings.TrimSpace(req.CheckoutIntentKey); intentKey != "" {
+		return s.resumeSession(ctx, intentKey)
+	}
+
 	idempotencyKey := normalizedCheckoutIdempotencyKey(req.IdempotencyKey)
 	if idempotencyKey == "" {
 		return CreateCheckoutResponse{}, fmt.Errorf("%w: missing Idempotency-Key header", ErrInvalidRequest)
-	}
-
-	// Resume path: checkout_intent_key provided → bypass plan/tenant resolution.
-	if intentKey := strings.TrimSpace(req.CheckoutIntentKey); intentKey != "" {
-		return s.resumeSession(ctx, intentKey)
 	}
 
 	if err := ValidateCreateCheckoutRequest(req); err != nil {
@@ -120,12 +120,40 @@ func (s *CheckoutService) CreateSession(ctx context.Context, req CreateCheckoutR
 		return CreateCheckoutResponse{}, fmt.Errorf("find plan: %w", err)
 	}
 
+	// Serialize concurrent create attempts for the same business fingerprint.
+	// This prevents a race where two goroutines both pass reuseOpenOrderForFingerprint
+	// before either order is persisted. Only applied when CPF is present (always
+	// true after ValidateCreateCheckoutRequest).
+	if cpf != "" {
+		fpHash := CalculateFingerprintHash(scope.tenantID, cpf, plan.slug, plan.billingCycle)
+		fpToken := uuid.New().String()
+		if err := s.lock.AcquireFingerprintLock(ctx, fpHash, fpToken); err != nil {
+			if errors.Is(err, checkout.ErrLockNotAcquired) {
+				return CreateCheckoutResponse{}, ErrCheckoutInProgress
+			}
+			return CreateCheckoutResponse{}, fmt.Errorf("acquire fingerprint lock: %w", err)
+		}
+		defer s.lock.ReleaseFingerprintLock(ctx, fpHash, fpToken) //nolint:errcheck
+	}
+
 	orderNSU, replay, err := s.reserveOrReplayCheckout(ctx, scope, idempotencyKey, requestHash, now)
 	if err != nil {
 		return CreateCheckoutResponse{}, err
 	}
 	if replay != nil {
 		return *replay, nil
+	}
+
+	// Dedup: if a fresh idempotency key was just reserved and a matching open order already
+	// exists for this tenant+CPF+plan, reuse it instead of creating a duplicate.
+	if cpf != "" {
+		reuseResp, reuseErr := s.reuseOpenOrderForFingerprint(ctx, scope, plan, idempotencyKey, cpf, orderNSU, now)
+		if reuseErr != nil {
+			return CreateCheckoutResponse{}, reuseErr
+		}
+		if reuseResp != nil {
+			return *reuseResp, nil
+		}
 	}
 
 	// Generate backend-owned resume handle and expiry before persisting the order.
@@ -193,7 +221,23 @@ func (s *CheckoutService) CreateSession(ctx context.Context, req CreateCheckoutR
 
 	providerResp, err := s.provider.CreateCheckout(ctx, providerReq)
 	if err != nil {
-		// Order stays as "created" and the idempotency key stays pending.
+		var rejErr *ProviderCreateRejectedError
+		if errors.As(err, &rejErr) {
+			// Deterministic provider rejection: terminalize the order and idempotency key
+			// so a fresh Idempotency-Key can create again without hitting fingerprint dedup.
+			termAt := time.Now().UTC()
+			if termErr := s.orders.UpdateStatus(ctx, orderNSU, OrderStatusFailed, termAt); termErr != nil {
+				s.log.Error("failed to mark order failed after deterministic provider rejection",
+					zap.String("order_nsu", orderNSU), zap.Error(termErr))
+			} else {
+				s.statusCache.InvalidateOrderStatus(ctx, orderNSU) //nolint:errcheck
+			}
+			if failErr := s.idempotency.Fail(ctx, scope.tenantID, checkoutCreateOperation, idempotencyKey, termAt); failErr != nil {
+				s.log.Warn("failed to mark idempotency key failed after deterministic provider rejection",
+					zap.String("order_nsu", orderNSU), zap.Error(failErr))
+			}
+		}
+		// For transient/ambiguous failures the order stays as "created" and the idempotency key stays pending.
 		// Same-key retries can replay once provider URL is persisted or resume if the order was never created.
 		s.log.Warn("provider checkout creation failed", zap.String("order_nsu", orderNSU), zap.Error(err))
 		return CreateCheckoutResponse{}, fmt.Errorf("provider checkout: %w", err)
@@ -322,6 +366,9 @@ func (s *CheckoutService) resumeSession(ctx context.Context, intentKey string) (
 func (s *CheckoutService) recoverCheckoutSession(ctx context.Context, firstRead *checkout.Order) (CreateCheckoutResponse, error) {
 	lockToken := uuid.New().String()
 	if err := s.lock.AcquireOrderLock(ctx, firstRead.OrderNSU, lockToken); err != nil {
+		if errors.Is(err, checkout.ErrLockNotAcquired) {
+			return CreateCheckoutResponse{}, ErrCheckoutInProgress
+		}
 		return CreateCheckoutResponse{}, fmt.Errorf("acquire recovery lock: %w", err)
 	}
 	defer s.lock.ReleaseOrderLock(ctx, firstRead.OrderNSU, lockToken) //nolint:errcheck
@@ -401,6 +448,17 @@ func (s *CheckoutService) recoverCheckoutSession(ctx context.Context, firstRead 
 			zap.String("order_nsu", order.OrderNSU),
 			zap.Int64("plan_price_cents", plan.PriceCents),
 			zap.Int64("order_amount_cents", order.AmountCents),
+			zap.String("metric", "checkout_recovery_ambiguous"),
+		)
+		return CreateCheckoutResponse{}, checkoutContinuationErrorForOrder(ErrProviderStateAmbiguous, order)
+	}
+
+	// Persist create-attempt marker before calling provider (same safety invariant as initial create).
+	recoveryAttemptedAt := time.Now().UTC()
+	if err := s.orders.MarkProviderCreateAttempted(ctx, order.OrderNSU, recoveryAttemptedAt); err != nil {
+		s.log.Warn("recovery: failed to persist provider create attempt marker",
+			zap.String("order_nsu", order.OrderNSU),
+			zap.Error(err),
 			zap.String("metric", "checkout_recovery_ambiguous"),
 		)
 		return CreateCheckoutResponse{}, checkoutContinuationErrorForOrder(ErrProviderStateAmbiguous, order)
@@ -534,7 +592,9 @@ func (s *CheckoutService) replayExistingSession(ctx context.Context, tenantID, i
 	order, err := s.orders.GetByNSU(ctx, existing.ResourceID)
 	if err != nil {
 		if existing.Status == idempotency.StatusCommitted && existing.ResourceURL != "" {
-			return createCheckoutResponseFromRecord(existing, time.Time{}), nil
+			resp := createCheckoutResponseFromRecord(existing, time.Time{})
+			resp.Resumed = true
+			return resp, nil
 		}
 		if errors.Is(err, ErrOrderNotFound) && existing.Status == idempotency.StatusPending {
 			return CreateCheckoutResponse{}, ErrCheckoutInProgress
@@ -549,7 +609,9 @@ func (s *CheckoutService) replayExistingSession(ctx context.Context, tenantID, i
 			return CreateCheckoutResponse{}, ErrCheckoutInProgress
 		}
 		s.repairCheckoutOrder(ctx, order.OrderNSU, existing.ResourceURL, existing.ExternalRef, existing.ResourceStatus, existing.UpdatedAt)
-		return createCheckoutResponseFromRecord(existing, order.CreatedAt), nil
+		resp := createCheckoutResponseFromRecord(existing, order.CreatedAt)
+		resp.Resumed = true
+		return resp, nil
 	}
 
 	status := OrderStatus(order.Status)
@@ -568,6 +630,7 @@ func (s *CheckoutService) replayExistingSession(ctx context.Context, tenantID, i
 		Status:            status,
 		CheckoutURL:       order.ProviderCheckoutURL,
 		ExpiresAt:         expiresAt,
+		Resumed:           true,
 	}, nil
 }
 
@@ -617,6 +680,7 @@ func (s *CheckoutService) reserveOrReplayCheckout(ctx context.Context, scope res
 			s.repairCheckoutOrder(ctx, order.OrderNSU, existing.ResourceURL, existing.ExternalRef, existing.ResourceStatus, existing.UpdatedAt)
 			replay := createCheckoutResponseFromRecord(existing, order.CreatedAt)
 			replay.CheckoutIntentKey = order.CheckoutIntentKey
+			replay.Resumed = true
 			return "", &replay, nil
 		}
 		expiresAt := order.ExpiresAt
@@ -629,11 +693,13 @@ func (s *CheckoutService) reserveOrReplayCheckout(ctx context.Context, scope res
 			Status:            OrderStatusCheckoutCreated,
 			CheckoutURL:       order.ProviderCheckoutURL,
 			ExpiresAt:         expiresAt,
+			Resumed:           true,
 		}
 		return "", &replay, nil
 	}
 	if existing.Status == idempotency.StatusCommitted && existing.ResourceURL != "" {
 		replay := createCheckoutResponseFromRecord(existing, time.Time{})
+		replay.Resumed = true
 		return "", &replay, nil
 	}
 	if errors.Is(err, ErrOrderNotFound) && existing.Status == idempotency.StatusPending {
@@ -684,6 +750,72 @@ func createCheckoutResponseFromRecord(record *idempotency.Key, createdAt time.Ti
 		// CheckoutIntentKey is not stored in the idempotency record;
 		// callers must set it from the order when available.
 	}
+}
+
+// reuseOpenOrderForFingerprint checks for existing open orders with the same
+// tenant+CPF+plan_slug+billing_cycle fingerprint. Stale cases (clock-expired, legacy
+// orders without checkout_intent_key) are best-effort marked expired and skipped so
+// the caller can proceed to create a fresh order. Any remaining active open order
+// causes a safe 409-style ErrCheckoutAlreadyOpen — no session data is returned.
+//
+// proposedOrderNSU is the resource ID reserved in the idempotency store; it is
+// released implicitly when the caller returns an error (the pending key is never
+// committed to a real order).
+//
+// Returns (nil, nil) when no active blocking order is found and create should proceed.
+func (s *CheckoutService) reuseOpenOrderForFingerprint(ctx context.Context, scope resolvedTenantScope, plan resolvedCheckoutPlan, idempotencyKey, cpf, proposedOrderNSU string, now time.Time) (*CreateCheckoutResponse, error) {
+	existing, err := s.orders.FindOpenByBusinessFingerprint(ctx, scope.tenantID, cpf, plan.slug, plan.billingCycle)
+	if err != nil {
+		s.log.Warn("dedup fingerprint check failed", zap.Error(err))
+		return nil, fmt.Errorf("dedup fingerprint lookup: %w", err)
+	}
+	for i := range existing {
+		o := &existing[i]
+		// Clock-expired: acquire lock, mark expired under lock, and skip.
+		if !o.ExpiresAt.IsZero() && now.After(o.ExpiresAt) {
+			if lockErr := s.expireStaleOrderUnderLock(ctx, o.OrderNSU, now); lockErr != nil {
+				return nil, lockErr
+			}
+			continue
+		}
+		// Legacy order without resume context: cannot be identified as the caller's own session.
+		// Acquire lock, mark expired under lock so no concurrent process is lost.
+		if strings.TrimSpace(o.CheckoutIntentKey) == "" {
+			if lockErr := s.expireStaleOrderUnderLock(ctx, o.OrderNSU, now); lockErr != nil {
+				return nil, lockErr
+			}
+			continue
+		}
+		// Active matching open order still exists after stale cleanup.
+		// Do not create a new order and do not return the existing session to the caller.
+		s.log.Info("checkout dedup: active open order exists for fingerprint, blocking duplicate create",
+			zap.String("existing_order_nsu", o.OrderNSU),
+			zap.String("proposed_order_nsu", proposedOrderNSU),
+			zap.String("tenant_id", o.TenantID),
+			zap.String("metric", "checkout_dedup_blocked"),
+		)
+		return nil, ErrCheckoutAlreadyOpen
+	}
+	return nil, nil
+}
+
+// expireStaleOrderUnderLock acquires the order lock, marks the order expired, and releases the lock.
+// Returns ErrCheckoutInProgress when the lock is already held (another process owns the order).
+// Any other lock or update error is returned as a transient infrastructure error so the caller
+// fails closed rather than proceeding to create a duplicate order.
+func (s *CheckoutService) expireStaleOrderUnderLock(ctx context.Context, orderNSU string, now time.Time) error {
+	token := uuid.New().String()
+	if err := s.lock.AcquireOrderLock(ctx, orderNSU, token); err != nil {
+		if errors.Is(err, checkout.ErrLockNotAcquired) {
+			return ErrCheckoutInProgress
+		}
+		return fmt.Errorf("acquire lock for stale order expiry: %w", err)
+	}
+	defer s.lock.ReleaseOrderLock(ctx, orderNSU, token) //nolint:errcheck
+	if err := s.orders.UpdateStatus(ctx, orderNSU, OrderStatusExpired, now); err != nil {
+		return fmt.Errorf("expire stale order: %w", err)
+	}
+	return nil
 }
 
 // PlanQueryService handles GET /v1/plans.

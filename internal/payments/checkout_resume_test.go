@@ -378,9 +378,10 @@ func TestCheckoutSession_Resume_DoesNotCallProviderWhenURLPersisted(t *testing.T
 	}
 }
 
-// TestCheckoutSession_Resume_RequiresMissingIdempotencyKey verifies that the
-// Idempotency-Key header is required even for resume requests.
-func TestCheckoutSession_Resume_RequiresMissingIdempotencyKey(t *testing.T) {
+// TestCheckoutSession_Resume_WithoutIdempotencyKey verifies that a checkout_intent_key
+// from a prior create produces a resume response even when Idempotency-Key is absent.
+// Resume by checkout_intent_key does not require an Idempotency-Key header.
+func TestCheckoutSession_Resume_WithoutIdempotencyKey(t *testing.T) {
 	orders := newFakeOrderRepo()
 	intentKey := GenerateCheckoutIntentKey()
 	orders.orders["idem-nsu"] = &checkout.Order{
@@ -394,12 +395,18 @@ func TestCheckoutSession_Resume_RequiresMissingIdempotencyKey(t *testing.T) {
 	}
 	svc := newResumeTestService(orders, InfinitePayCheckoutResponse{}, nil)
 
-	_, err := svc.CreateSession(context.Background(), CreateCheckoutRequest{
-		IdempotencyKey:    "", // missing
+	resp, err := svc.CreateSession(context.Background(), CreateCheckoutRequest{
+		IdempotencyKey:    "", // intentionally absent
 		CheckoutIntentKey: intentKey,
 	})
-	if !errors.Is(err, ErrInvalidRequest) {
-		t.Fatalf("expected ErrInvalidRequest when Idempotency-Key is missing, got %v", err)
+	if err != nil {
+		t.Fatalf("expected resume to succeed without Idempotency-Key, got %v", err)
+	}
+	if !resp.Resumed {
+		t.Error("expected Resumed=true")
+	}
+	if resp.OrderNSU != "idem-nsu" {
+		t.Errorf("expected order_nsu=%q, got %q", "idem-nsu", resp.OrderNSU)
 	}
 }
 
@@ -464,5 +471,64 @@ func TestGenerateCheckoutIntentKey(t *testing.T) {
 			t.Errorf("duplicate key generated: %q", k)
 		}
 		seen[k] = struct{}{}
+	}
+}
+
+// newResumeTestServiceWithLock is like newResumeTestService but lets the caller
+// inject a custom LockManager.
+func newResumeTestServiceWithLock(orders *fakeOrderRepo, lock LockManager, providerResp InfinitePayCheckoutResponse, providerErr error) *CheckoutService {
+	provider := &fakeProvider{resp: providerResp, err: providerErr}
+	return NewCheckoutService(
+		&fakeVersionedPlanRepo{plan: &commercialplans.Plan{
+			ID:              primitive.NewObjectID(),
+			PlanUUID:        "plan-basic",
+			OrganizationID:  "org-001",
+			TenantID:        "tenant-001",
+			Slug:            "basic",
+			Version:         1,
+			Name:            "Plano Basic",
+			BillingCycle:    commercialplans.BillingCycleMonthly,
+			PriceCents:      9900,
+			Currency:        "BRL",
+			Active:          true,
+			MaxInstallments: 1,
+			Channel:         commercialplans.ChannelAll,
+			ValidFrom:       time.Now().UTC().Add(-time.Hour),
+			CreatedAt:       time.Now().UTC(),
+			UpdatedAt:       time.Now().UTC(),
+		}},
+		&fakeOrganizationRepo{org: &organizations.Organization{OrgUUID: "org-001", Slug: "acme", Active: true}},
+		&fakeTenantRepo{tenant: &tenants.Tenant{TenantUUID: "tenant-001", OrganizationID: "org-001", Slug: "clinic", Active: true}},
+		orders,
+		newFakeCheckoutIdempotencyRepo(),
+		provider,
+		lock,
+		fakeStatusCache{},
+		config.PaymentsConfig{},
+		zap.NewNop(),
+	)
+}
+
+// TestCreateCheckoutSession_FingerprintLockHeld_BlocksCreate verifies that when the
+// fingerprint lock is already held (simulating a concurrent create in flight), the
+// service returns ErrCheckoutInProgress immediately without creating a new order.
+// This closes the race window between two concurrent requests with different
+// Idempotency-Keys but the same tenant+CPF+plan_slug+billing_cycle fingerprint.
+func TestCreateCheckoutSession_FingerprintLockHeld_BlocksCreate(t *testing.T) {
+	orders := newFakeOrderRepo()
+	svc := newResumeTestServiceWithLock(
+		orders,
+		fakeLockManager{failFingerprintLock: true},
+		InfinitePayCheckoutResponse{CheckoutURL: "https://checkout.example/fp-lock", InvoiceSlug: "inv-fp-lock"},
+		nil,
+	)
+
+	_, err := svc.CreateSession(context.Background(), validCheckoutRequest())
+
+	if !errors.Is(err, ErrCheckoutInProgress) {
+		t.Fatalf("expected ErrCheckoutInProgress when fingerprint lock is held, got %v", err)
+	}
+	if len(orders.orders) != 0 {
+		t.Errorf("expected no orders created when fingerprint lock blocks; got %d", len(orders.orders))
 	}
 }

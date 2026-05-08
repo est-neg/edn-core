@@ -417,15 +417,18 @@ paths:
         - Com `checkout_intent_key` expirado ou em estado terminal: 409 com `error_code` específico.
 
         O preço é sempre resolvido pelo backend a partir do plano — nunca aceito do cliente.
-        O header `Idempotency-Key` é obrigatório para retry seguro no caminho de criação.
-        `organization_slug` e `tenant_slug` são obrigatórios; o backend resolve o tenant
+        O header `Idempotency-Key` é obrigatório para o caminho de criacao e para retries do mesmo checkout.
+        Para retomada via `checkout_intent_key`, o header `Idempotency-Key` pode ser omitido.
+        `organization_slug` e `tenant_slug` sao obrigatorios; o backend resolve o tenant
         em runtime e seleciona o plano publicado em `versioned_plans`.
       tags: [Checkout]
       parameters:
         - name: Idempotency-Key
           in: header
-          required: true
-          description: Chave opaca do cliente para colapsar retries do mesmo checkout (caminho de criação).
+          required: false
+          description: >-
+            Obrigatorio para criacao e retry seguro (caminho sem checkout_intent_key).
+            Opcional quando checkout_intent_key e fornecido (retomada).
           schema:
             type: string
             minLength: 1
@@ -469,7 +472,8 @@ paths:
           description: |
             Conflito de estado — `error_code` diferencia o caso:
             - `checkout_idempotency_conflict`: Idempotency-Key já foi usada com payload diferente.
-            - `checkout_in_progress`: outro request está processando o mesmo checkout agora.
+            - `checkout_in_progress`: outro request está processando o mesmo checkout agora (lock de fingerprint ativo).
+            - `checkout_already_open`: já existe um checkout ativo para o mesmo CPF/plano; use o `checkout_intent_key` original para retomar.
             - `checkout_non_resumable`: checkout_intent_key existe mas não pode ser retomado.
             - `checkout_expired`: checkout_intent_key expirado.
           content:
@@ -893,7 +897,19 @@ components:
 
     CreateCheckoutRequest:
       type: object
-      required: [organization_slug, tenant_slug, plan_slug, billing_cycle, customer]
+      description: |
+        Corpo do request para criar ou retomar um checkout.
+
+        **Caminho de criação** (sem `checkout_intent_key`): `organization_slug`, `tenant_slug`,
+        `plan_slug`, `billing_cycle` e `customer` são obrigatórios. O header `Idempotency-Key`
+        também é obrigatório neste caminho.
+
+        **Caminho de retomada** (com `checkout_intent_key`): apenas `checkout_intent_key` é
+        necessário no body. Os demais campos são ignorados. O header `Idempotency-Key` é
+        opcional neste caminho.
+
+        O OpenAPI 3.0 não suporta requisitos condicionais; os campos obrigatórios de cada
+        caminho estão documentados acima.
       properties:
         organization_slug:
           type: string
@@ -970,6 +986,7 @@ components:
           enum:
             - checkout_idempotency_conflict
             - checkout_in_progress
+            - checkout_already_open
             - checkout_non_resumable
             - checkout_expired
             - checkout_recovery_required

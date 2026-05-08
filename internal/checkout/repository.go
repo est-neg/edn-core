@@ -17,6 +17,10 @@ type OrderRepository interface {
 	// ordered by created_at descending. Returns empty slice when none found.
 	// Must only be called from admin-authenticated paths.
 	FindByCustomerDocument(ctx context.Context, normalizedDocument string) ([]Order, error)
+	// FindOpenByBusinessFingerprint returns non-terminal orders scoped to
+	// tenant+CPF+plan_slug+billing_cycle, ordered by created_at descending.
+	// Intended for backend-internal dedup only — never call from public search.
+	FindOpenByBusinessFingerprint(ctx context.Context, tenantID, normalizedCPF, planSlug, billingCycle string) ([]Order, error)
 	UpdateStatus(ctx context.Context, orderNSU, status string, updatedAt time.Time) error
 	UpdateProviderURL(ctx context.Context, orderNSU, checkoutURL, invoiceSlug string, updatedAt time.Time) error
 	UpdateReceipt(ctx context.Context, orderNSU, receiptURL string, updatedAt time.Time) error

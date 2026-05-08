@@ -120,7 +120,7 @@ Content-Type: application/json
 Idempotency-Key: checkout-2026-04-25-user-123
 ```
 
-> **Browser / CORS:** o endpoint público aceita o header `Idempotency-Key` via preflight. Envie sempre essa chave em requisições originadas no browser.
+> **Browser / CORS:** o endpoint publico aceita o header `Idempotency-Key` via preflight. Envie esta chave em requisicoes de criacao originadas no browser. Para retomada via `checkout_intent_key`, o header e opcional.
 
 ### Criar novo checkout
 
@@ -205,7 +205,7 @@ Resposta `200` (checkout retomado, sem criar novo pedido):
 }
 ```
 
-**Idempotencia:** reutilize a mesma `Idempotency-Key` quando for repetir exatamente o mesmo checkout por retry de rede. Se o payload mudar, gere uma nova chave.
+**Idempotencia:** reutilize a mesma `Idempotency-Key` quando for repetir exatamente o mesmo checkout por retry de rede (caminho de criacao). Se o payload mudar, gere uma nova chave. Para retomada via `checkout_intent_key`, a `Idempotency-Key` e opcional — o backend identifica o pedido pelo handle opaco.
 
 **Falha parcial tolerada:** se a InfinitePay já tiver criado o checkout mas o backend tiver sofrido falha parcial na persistência local, repetir o mesmo request com a mesma `Idempotency-Key` retorna a mesma sessão de checkout em vez de criar um segundo checkout.
 

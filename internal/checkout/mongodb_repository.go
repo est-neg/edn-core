@@ -137,6 +137,34 @@ func (r *mongoOrders) FindByCustomerDocument(ctx context.Context, normalizedDocu
 	return orders, nil
 }
 
+// FindOpenByBusinessFingerprint returns non-terminal orders scoped to
+// tenant+CPF+plan_slug+billing_cycle, ordered by created_at descending, limit 5.
+// Only statuses "created", "checkout_created", and "pending" are returned.
+func (r *mongoOrders) FindOpenByBusinessFingerprint(ctx context.Context, tenantID, normalizedCPF, planSlug, billingCycle string) ([]Order, error) {
+	openStatuses := bson.A{"created", "checkout_created", "pending"}
+	filter := bson.D{
+		{Key: "tenant_id", Value: tenantID},
+		{Key: "customer_document", Value: normalizedCPF},
+		{Key: "plan_slug", Value: planSlug},
+		{Key: "billing_cycle", Value: billingCycle},
+		{Key: "status", Value: bson.D{{Key: "$in", Value: openStatuses}}},
+	}
+	opts := options.Find().SetSort(bson.D{{Key: "created_at", Value: -1}})
+	cursor, err := r.coll.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, fmt.Errorf("find orders by fingerprint: %w", err)
+	}
+	defer cursor.Close(ctx)
+	var orders []Order
+	if err := cursor.All(ctx, &orders); err != nil {
+		return nil, fmt.Errorf("decode orders by fingerprint: %w", err)
+	}
+	if orders == nil {
+		orders = []Order{}
+	}
+	return orders, nil
+}
+
 // ─── Payments ─────────────────────────────────────────────────────────────────
 
 type mongoPayments struct{ coll *mongo.Collection }

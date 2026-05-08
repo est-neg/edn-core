@@ -40,6 +40,10 @@ type OrderRepository interface {
 	// FindByCustomerDocument returns orders for a given normalized CPF (11 digits).
 	// Returns empty slice when none found. Must only be called from admin-authenticated paths.
 	FindByCustomerDocument(ctx context.Context, normalizedDocument string) ([]checkout.Order, error)
+	// FindOpenByBusinessFingerprint returns non-terminal orders scoped to
+	// tenant+CPF+plan_slug+billing_cycle, ordered by created_at descending.
+	// Intended for backend-internal dedup only — never call from public search.
+	FindOpenByBusinessFingerprint(ctx context.Context, tenantID, normalizedCPF, planSlug, billingCycle string) ([]checkout.Order, error)
 	UpdateStatus(ctx context.Context, orderNSU string, status OrderStatus, updatedAt time.Time) error
 	UpdateProviderURL(ctx context.Context, orderNSU, checkoutURL, invoiceSlug string, updatedAt time.Time) error
 	UpdateReceipt(ctx context.Context, orderNSU, receiptURL string, updatedAt time.Time) error
@@ -89,10 +93,16 @@ type IdempotencyStore interface {
 	SetWebhookHashSeen(ctx context.Context, eventHash string) error
 }
 
-// LockManager acquires distributed order locks.
+// LockManager acquires distributed order and fingerprint locks.
 type LockManager interface {
 	AcquireOrderLock(ctx context.Context, orderNSU, token string) error
 	ReleaseOrderLock(ctx context.Context, orderNSU, token string) error
+	// AcquireFingerprintLock serialises concurrent create attempts for the same
+	// tenant+CPF+plan_slug+billing_cycle combination. fingerprintHash must be the
+	// SHA-256 hex digest of those fields — never the raw CPF.
+	// Returns checkout.ErrLockNotAcquired when the key is already held.
+	AcquireFingerprintLock(ctx context.Context, fingerprintHash, token string) error
+	ReleaseFingerprintLock(ctx context.Context, fingerprintHash, token string) error
 }
 
 // StatusCache is the Redis order status read-through cache.

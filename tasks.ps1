@@ -147,6 +147,20 @@ switch ($Task) {
         exit $LASTEXITCODE
     }
 
+    "fail-stuck-checkouts" {
+        # Usage: .\tasks.ps1 fail-stuck-checkouts -order-nsu <NSU>[,<NSU2>] [-dry-run]
+        # Marks stuck checkout orders (provider call attempted, no URL delivered) as failed
+        # and fails their matching idempotency record when safe to do so.
+        Push-Location $PSScriptRoot
+        try {
+            Import-Env @(".env.development", ".env.local")
+            & go run ./cmd/fail-stuck-checkouts @ExtraArgs
+        } finally {
+            Pop-Location
+        }
+        exit $LASTEXITCODE
+    }
+
     "help" {
         Write-Host ""
         Write-Host "Targets disponiveis:" -ForegroundColor Cyan
@@ -171,8 +185,9 @@ switch ($Task) {
         Write-Host "    build-worker     Compila subscription-worker"
         Write-Host ""
         Write-Host "  DEV DATA:" -ForegroundColor Yellow
-        Write-Host "    seed-dev         Popula o MongoDB de desenvolvimento com org/tenant/catalog/plans"
-        Write-Host "    recreate-checkout  Recria checkout de pedido legado: -order-nsu <NSU> [-channel web|mobile] [-dry-run]"
+        Write-Host "    seed-dev              Popula o MongoDB de desenvolvimento com org/tenant/catalog/plans"
+        Write-Host "    recreate-checkout     Recria checkout de pedido legado: -order-nsu <NSU> [-channel web|mobile] [-dry-run]"
+        Write-Host "    fail-stuck-checkouts  Marca pedidos stuck como failed: -order-nsu <NSU>[,NSU2] [-dry-run]"
         Write-Host ""
         Write-Host "  QUALIDADE:" -ForegroundColor Yellow
         Write-Host "    test             Roda todos os testes"

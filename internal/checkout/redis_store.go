@@ -24,6 +24,14 @@ type CheckoutStore interface {
 	// ReleaseOrderLock releases the lock only if the token matches (safe release).
 	ReleaseOrderLock(ctx context.Context, orderNSU, token string) error
 
+	// Fingerprint lock serialises concurrent create attempts for the same
+	// tenant+CPF+plan_slug+billing_cycle combination. fingerprintHash must be
+	// the SHA-256 hex digest of those components — never the raw CPF.
+	// Returns ErrLockNotAcquired when the key is already held.
+	AcquireFingerprintLock(ctx context.Context, fingerprintHash, token string) error
+	// ReleaseFingerprintLock releases the fingerprint lock only if the token matches.
+	ReleaseFingerprintLock(ctx context.Context, fingerprintHash, token string) error
+
 	// Order status cache. Invalidated on every order mutation.
 	SetOrderStatus(ctx context.Context, orderNSU, status string) error
 	GetOrderStatus(ctx context.Context, orderNSU string) (status string, found bool, err error)
@@ -36,11 +44,12 @@ type CheckoutStore interface {
 
 // TTL constants match the spec exactly.
 const (
-	ttlWebhookIdem    = 24 * time.Hour
-	ttlOrderLock      = 15 * time.Second
-	ttlCheckoutStatus = 30 * time.Minute
-	ttlRateIP         = 1 * time.Minute
-	ttlRateEmail      = 5 * time.Minute
+	ttlWebhookIdem     = 24 * time.Hour
+	ttlOrderLock       = 15 * time.Second
+	ttlFingerprintLock = 30 * time.Second
+	ttlCheckoutStatus  = 30 * time.Minute
+	ttlRateIP          = 1 * time.Minute
+	ttlRateEmail       = 5 * time.Minute
 )
 
 // releaseLockScript atomically releases a lock only when the stored token matches.
@@ -53,10 +62,10 @@ else
 end
 `)
 
-// Key construction functions.
 func keyWebhookTx(transactionNSU string) string { return "idem:webhook:tx:" + transactionNSU }
 func keyWebhookHash(eventHash string) string    { return "idem:webhook:hash:" + eventHash }
 func keyOrderLock(orderNSU string) string       { return "lock:order:" + orderNSU }
+func keyFingerprintLock(hash string) string     { return "lock:checkout:fp:" + hash }
 func keyCheckoutStatus(orderNSU string) string  { return "checkout:status:" + orderNSU }
 func keyRateIP(ip string) string                { return "rate:checkout:ip:" + ip }
 func keyRateEmail(emailHash string) string      { return "rate:checkout:email:" + emailHash }
@@ -120,6 +129,31 @@ func (r *redisStore) ReleaseOrderLock(ctx context.Context, orderNSU, token strin
 		return fmt.Errorf("release order lock: %w", err)
 	}
 	_ = result // 0 = token mismatch or already expired; not treated as error
+	return nil
+}
+
+// AcquireFingerprintLock acquires a distributed lock keyed by the hashed business
+// fingerprint (tenant+CPF+plan_slug+billing_cycle). fingerprintHash must be a
+// SHA-256 hex digest — the raw CPF must never appear in the key.
+// Returns ErrLockNotAcquired if the lock is already held.
+func (r *redisStore) AcquireFingerprintLock(ctx context.Context, fingerprintHash, token string) error {
+	ok, err := r.client.SetNX(ctx, keyFingerprintLock(fingerprintHash), token, ttlFingerprintLock).Result()
+	if err != nil {
+		return fmt.Errorf("acquire fingerprint lock: %w", err)
+	}
+	if !ok {
+		return ErrLockNotAcquired
+	}
+	return nil
+}
+
+// ReleaseFingerprintLock releases the fingerprint lock only when the stored token matches.
+func (r *redisStore) ReleaseFingerprintLock(ctx context.Context, fingerprintHash, token string) error {
+	result, err := releaseLockScript.Run(ctx, r.client, []string{keyFingerprintLock(fingerprintHash)}, token).Int()
+	if err != nil && !errors.Is(err, redis.Nil) {
+		return fmt.Errorf("release fingerprint lock: %w", err)
+	}
+	_ = result
 	return nil
 }
 

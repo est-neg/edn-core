@@ -410,3 +410,42 @@ func TestCreateSession_PersistsProviderCreateAttemptedAt(t *testing.T) {
 		t.Error("expected provider_create_attempted_at to be set after CreateSession")
 	}
 }
+
+// TestRecovery_OrderLockContention_ReturnsErrCheckoutInProgress verifies that when
+// recoverCheckoutSession cannot acquire the order lock (concurrent recovery/resume in
+// flight), the service returns ErrCheckoutInProgress rather than a generic wrapped error.
+// This prevents the handler from falling through to a 502 for a recoverable 409.
+func TestRecovery_OrderLockContention_ReturnsErrCheckoutInProgress(t *testing.T) {
+	const orderNSU = "contention-recovery-nsu"
+	orders := newFakeOrderRepo()
+	intentKey := GenerateCheckoutIntentKey()
+	orders.orders[orderNSU] = &checkout.Order{
+		OrderNSU:            orderNSU,
+		TenantID:            "tenant-001",
+		PlanID:              "plan-basic",
+		AmountCents:         9900,
+		Status:              string(OrderStatusCreated),
+		ProviderCheckoutURL: "", // no URL → triggers recoverCheckoutSession
+		InvoiceSlug:         "",
+		CheckoutIntentKey:   intentKey,
+		ExpiresAt:           time.Now().UTC().Add(25 * time.Minute),
+		CreatedAt:           time.Now().UTC().Add(-2 * time.Minute),
+		UpdatedAt:           time.Now().UTC().Add(-2 * time.Minute),
+	}
+
+	svc := newResumeTestServiceWithLock(
+		orders,
+		fakeLockManager{failOrderLockForNSU: orderNSU},
+		InfinitePayCheckoutResponse{CheckoutURL: "https://should.not.be.called/"},
+		nil,
+	)
+
+	_, err := svc.CreateSession(context.Background(), CreateCheckoutRequest{
+		IdempotencyKey:    "recovery-contention-001",
+		CheckoutIntentKey: intentKey,
+	})
+
+	if !errors.Is(err, ErrCheckoutInProgress) {
+		t.Fatalf("expected ErrCheckoutInProgress when order lock is contended during recovery, got %v", err)
+	}
+}

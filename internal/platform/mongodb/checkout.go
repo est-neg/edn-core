@@ -100,6 +100,19 @@ func ensureOrdersIndexes(ctx context.Context, coll *mongo.Collection) error {
 			Keys:    bson.D{{Key: "customer_document", Value: 1}},
 			Options: options.Index().SetSparse(true).SetName("idx_orders_customer_document"),
 		},
+		{
+			// Supports backend-internal fingerprint dedup lookup scoped to
+			// tenant+CPF+plan_slug+billing_cycle+status. Non-unique; sparse on customer_document.
+			Keys: bson.D{
+				{Key: "tenant_id", Value: 1},
+				{Key: "customer_document", Value: 1},
+				{Key: "plan_slug", Value: 1},
+				{Key: "billing_cycle", Value: 1},
+				{Key: "status", Value: 1},
+				{Key: "created_at", Value: -1},
+			},
+			Options: options.Index().SetSparse(true).SetName("idx_orders_fingerprint_dedup"),
+		},
 	}
 	if _, err := coll.Indexes().CreateMany(ctx, indexes); err != nil {
 		return fmt.Errorf("ensure orders indexes: %w", err)

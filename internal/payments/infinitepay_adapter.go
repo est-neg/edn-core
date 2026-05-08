@@ -108,7 +108,8 @@ func (a *infinitePayAdapter) CreateCheckout(ctx context.Context, req InfinitePay
 		return InfinitePayCheckoutResponse{}, fmt.Errorf("build checkout request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+a.apiToken)
+	// POST /links does not use Authorization — the merchant handle embedded in the
+	// payload identifies the account. Do not send the API token here.
 
 	resp, err := a.client.Do(httpReq)
 	if err != nil {
@@ -120,6 +121,9 @@ func (a *infinitePayAdapter) CreateCheckout(ctx context.Context, req InfinitePay
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		// Log status code only — not response body (may contain sensitive data)
 		a.log.Warn("provider checkout non-2xx", zap.Int("status", resp.StatusCode))
+		if isDeterministicProviderCreateStatus(resp.StatusCode) {
+			return InfinitePayCheckoutResponse{}, &ProviderCreateRejectedError{StatusCode: resp.StatusCode}
+		}
 		return InfinitePayCheckoutResponse{}, fmt.Errorf("provider checkout status %d", resp.StatusCode)
 	}
 

@@ -2,6 +2,7 @@ package payments
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"go.mongodb.org/mongo-driver/mongo"
@@ -23,11 +24,19 @@ func (r *orderRepo) Create(ctx context.Context, order checkout.Order) error {
 }
 
 func (r *orderRepo) GetByNSU(ctx context.Context, orderNSU string) (*checkout.Order, error) {
-	return r.inner.FindByNSU(ctx, orderNSU)
+	order, err := r.inner.FindByNSU(ctx, orderNSU)
+	if errors.Is(err, checkout.ErrOrderNotFound) {
+		return nil, ErrOrderNotFound
+	}
+	return order, err
 }
 
 func (r *orderRepo) FindByIntentKey(ctx context.Context, intentKey string) (*checkout.Order, error) {
-	return r.inner.FindByIntentKey(ctx, intentKey)
+	order, err := r.inner.FindByIntentKey(ctx, intentKey)
+	if errors.Is(err, checkout.ErrOrderNotFound) {
+		return nil, ErrOrderNotFound
+	}
+	return order, err
 }
 
 func (r *orderRepo) UpdateStatus(ctx context.Context, orderNSU string, status OrderStatus, updatedAt time.Time) error {
@@ -48,6 +57,10 @@ func (r *orderRepo) MarkProviderCreateAttempted(ctx context.Context, orderNSU st
 
 func (r *orderRepo) FindByCustomerDocument(ctx context.Context, normalizedDocument string) ([]checkout.Order, error) {
 	return r.inner.FindByCustomerDocument(ctx, normalizedDocument)
+}
+
+func (r *orderRepo) FindOpenByBusinessFingerprint(ctx context.Context, tenantID, normalizedCPF, planSlug, billingCycle string) ([]checkout.Order, error) {
+	return r.inner.FindOpenByBusinessFingerprint(ctx, tenantID, normalizedCPF, planSlug, billingCycle)
 }
 
 // checkoutIdempotencyRepo adapts idempotency.Repository to payments.CheckoutIdempotencyRepository.
@@ -189,6 +202,14 @@ func (a *checkoutStoreAdapter) AcquireOrderLock(ctx context.Context, orderNSU, t
 
 func (a *checkoutStoreAdapter) ReleaseOrderLock(ctx context.Context, orderNSU, token string) error {
 	return a.store.ReleaseOrderLock(ctx, orderNSU, token)
+}
+
+func (a *checkoutStoreAdapter) AcquireFingerprintLock(ctx context.Context, fingerprintHash, token string) error {
+	return a.store.AcquireFingerprintLock(ctx, fingerprintHash, token)
+}
+
+func (a *checkoutStoreAdapter) ReleaseFingerprintLock(ctx context.Context, fingerprintHash, token string) error {
+	return a.store.ReleaseFingerprintLock(ctx, fingerprintHash, token)
 }
 
 func (a *checkoutStoreAdapter) GetOrderStatus(ctx context.Context, orderNSU string) (string, bool, error) {

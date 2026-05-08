@@ -100,6 +100,13 @@ func (h *Handler) CreateCheckoutSession(w http.ResponseWriter, r *http.Request) 
 			})
 			return
 		}
+		if errors.Is(err, ErrCheckoutAlreadyOpen) {
+			writeJSON(w, http.StatusConflict, CheckoutErrorResponse{
+				Error:     "checkout already open",
+				ErrorCode: ErrCodeCheckoutAlreadyOpen,
+			})
+			return
+		}
 		if errors.Is(err, ErrCheckoutInProgress) {
 			writeJSON(w, http.StatusConflict, CheckoutErrorResponse{
 				Error:     "checkout already in progress",

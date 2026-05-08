@@ -117,6 +117,7 @@ type fakeOrderRepo struct {
 	updateProviderURLErr           error
 	updateStatusErr                error
 	markProviderCreateAttemptedErr error
+	findOpenByFingerprintErr       error
 }
 
 func newFakeOrderRepo() *fakeOrderRepo {
@@ -198,6 +199,33 @@ func (r *fakeOrderRepo) FindByCustomerDocument(_ context.Context, normalizedDocu
 	return out, nil
 }
 
+func (r *fakeOrderRepo) FindOpenByBusinessFingerprint(_ context.Context, tenantID, normalizedCPF, planSlug, billingCycle string) ([]checkout.Order, error) {
+	if r.findOpenByFingerprintErr != nil {
+		return nil, r.findOpenByFingerprintErr
+	}
+	openStatuses := map[string]bool{"created": true, "checkout_created": true, "pending": true}
+	var out []checkout.Order
+	for _, o := range r.orders {
+		if o.TenantID != tenantID {
+			continue
+		}
+		if o.CustomerDocument != normalizedCPF {
+			continue
+		}
+		if o.PlanSlug != planSlug || o.BillingCycle != billingCycle {
+			continue
+		}
+		if !openStatuses[o.Status] {
+			continue
+		}
+		out = append(out, *o)
+	}
+	if out == nil {
+		out = []checkout.Order{}
+	}
+	return out, nil
+}
+
 func (r *fakeOrderRepo) MarkProviderCreateAttempted(_ context.Context, orderNSU string, attemptedAt time.Time) error {
 	if r.markProviderCreateAttemptedErr != nil {
 		return r.markProviderCreateAttemptedErr
@@ -230,10 +258,29 @@ func (p *fakeProvider) VerifyPayment(_ context.Context, _, _, _ string) (Infinit
 	return InfinitePayVerifyResponse{}, nil
 }
 
-type fakeLockManager struct{}
+type fakeLockManager struct {
+	failFingerprintLock bool
+	fingerprintLockErr  error  // when non-nil, returned by AcquireFingerprintLock (takes precedence over failFingerprintLock)
+	failOrderLockForNSU string // when non-empty, AcquireOrderLock returns checkout.ErrLockNotAcquired for this exact NSU
+}
 
-func (fakeLockManager) AcquireOrderLock(context.Context, string, string) error { return nil }
-func (fakeLockManager) ReleaseOrderLock(context.Context, string, string) error { return nil }
+func (m fakeLockManager) AcquireOrderLock(_ context.Context, orderNSU, _ string) error {
+	if m.failOrderLockForNSU != "" && m.failOrderLockForNSU == orderNSU {
+		return checkout.ErrLockNotAcquired
+	}
+	return nil
+}
+func (m fakeLockManager) ReleaseOrderLock(context.Context, string, string) error { return nil }
+func (m fakeLockManager) AcquireFingerprintLock(_ context.Context, _, _ string) error {
+	if m.fingerprintLockErr != nil {
+		return m.fingerprintLockErr
+	}
+	if m.failFingerprintLock {
+		return checkout.ErrLockNotAcquired
+	}
+	return nil
+}
+func (m fakeLockManager) ReleaseFingerprintLock(context.Context, string, string) error { return nil }
 
 type fakeStatusCache struct{}
 
@@ -557,5 +604,149 @@ func TestCheckoutService_CreateSession_BothCommitAndPersistFail_ReturnsProviderS
 	}
 	if provider.calls != 1 {
 		t.Fatalf("expected provider to be called once, got %d", provider.calls)
+	}
+}
+
+// TestCheckoutService_CreateSession_DeterministicProviderError_TerminalizesOrderAndIdempotency
+// verifies that a deterministic 4xx from the provider (via *ProviderCreateRejectedError)
+// marks the order as failed and the idempotency key as failed, so a fresh
+// Idempotency-Key can create a new order for the same fingerprint.
+func TestCheckoutService_CreateSession_DeterministicProviderError_TerminalizesOrderAndIdempotency(t *testing.T) {
+	provider := &fakeProvider{err: &ProviderCreateRejectedError{StatusCode: 422}}
+	orders := newFakeOrderRepo()
+	idemRepo := newFakeCheckoutIdempotencyRepo()
+	service := NewCheckoutService(
+		&fakeVersionedPlanRepo{plan: &commercialplans.Plan{
+			ID:              primitive.NewObjectID(),
+			PlanUUID:        "plan-basic",
+			OrganizationID:  "org-001",
+			TenantID:        "tenant-001",
+			Slug:            "basic",
+			Version:         1,
+			Name:            "Plano Basic",
+			BillingCycle:    commercialplans.BillingCycleMonthly,
+			PriceCents:      9900,
+			Currency:        "BRL",
+			MaxInstallments: 1,
+			Channel:         commercialplans.ChannelAll,
+			Active:          true,
+			ValidFrom:       time.Now().UTC().Add(-time.Hour),
+			CreatedAt:       time.Now().UTC(),
+			UpdatedAt:       time.Now().UTC(),
+		}},
+		&fakeOrganizationRepo{org: &organizations.Organization{OrgUUID: "org-001", Slug: "acme", Active: true}},
+		&fakeTenantRepo{tenant: &tenants.Tenant{TenantUUID: "tenant-001", OrganizationID: "org-001", Slug: "clinic", Active: true}},
+		orders,
+		idemRepo,
+		provider,
+		fakeLockManager{},
+		fakeStatusCache{},
+		config.PaymentsConfig{},
+		zap.NewNop(),
+	)
+
+	req := validCheckoutRequest()
+	_, err := service.CreateSession(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected error from deterministic provider rejection")
+	}
+
+	// Unwrap and verify the typed error is preserved.
+	var rejErr *ProviderCreateRejectedError
+	if !errors.As(err, &rejErr) {
+		t.Fatalf("expected wrapped *ProviderCreateRejectedError, got %T: %v", err, err)
+	}
+	if rejErr.StatusCode != 422 {
+		t.Errorf("StatusCode: got %d, want 422", rejErr.StatusCode)
+	}
+
+	// The single order created before the provider call must be terminalized.
+	if len(orders.orders) != 1 {
+		t.Fatalf("expected 1 order, got %d", len(orders.orders))
+	}
+	var orderNSU string
+	for k := range orders.orders {
+		orderNSU = k
+	}
+	o, _ := orders.GetByNSU(context.Background(), orderNSU)
+	if o.Status != string(OrderStatusFailed) {
+		t.Errorf("order status: got %q, want %q", o.Status, OrderStatusFailed)
+	}
+
+	// Idempotency key must be marked failed.
+	idemKey := idemLookup("tenant-001", checkoutCreateOperation, req.IdempotencyKey)
+	rec, ok := idemRepo.records[idemKey]
+	if !ok {
+		t.Fatal("idempotency record not found")
+	}
+	if rec.Status != "failed" {
+		t.Errorf("idempotency status: got %q, want \"failed\"", rec.Status)
+	}
+}
+
+// TestCheckoutService_CreateSession_TransientProviderError_PreservesOpenOrder verifies that
+// a transient provider error (generic fmt.Errorf, not *ProviderCreateRejectedError) does NOT
+// terminalize the order or idempotency key, preserving existing recovery semantics.
+func TestCheckoutService_CreateSession_TransientProviderError_PreservesOpenOrder(t *testing.T) {
+	provider := &fakeProvider{err: errors.New("provider timeout")}
+	orders := newFakeOrderRepo()
+	idemRepo := newFakeCheckoutIdempotencyRepo()
+	service := NewCheckoutService(
+		&fakeVersionedPlanRepo{plan: &commercialplans.Plan{
+			ID:              primitive.NewObjectID(),
+			PlanUUID:        "plan-basic",
+			OrganizationID:  "org-001",
+			TenantID:        "tenant-001",
+			Slug:            "basic",
+			Version:         1,
+			Name:            "Plano Basic",
+			BillingCycle:    commercialplans.BillingCycleMonthly,
+			PriceCents:      9900,
+			Currency:        "BRL",
+			MaxInstallments: 1,
+			Channel:         commercialplans.ChannelAll,
+			Active:          true,
+			ValidFrom:       time.Now().UTC().Add(-time.Hour),
+			CreatedAt:       time.Now().UTC(),
+			UpdatedAt:       time.Now().UTC(),
+		}},
+		&fakeOrganizationRepo{org: &organizations.Organization{OrgUUID: "org-001", Slug: "acme", Active: true}},
+		&fakeTenantRepo{tenant: &tenants.Tenant{TenantUUID: "tenant-001", OrganizationID: "org-001", Slug: "clinic", Active: true}},
+		orders,
+		idemRepo,
+		provider,
+		fakeLockManager{},
+		fakeStatusCache{},
+		config.PaymentsConfig{},
+		zap.NewNop(),
+	)
+
+	req := validCheckoutRequest()
+	_, err := service.CreateSession(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected error from transient provider failure")
+	}
+
+	// Order must remain in its pre-provider-call status (created), NOT failed.
+	if len(orders.orders) != 1 {
+		t.Fatalf("expected 1 order, got %d", len(orders.orders))
+	}
+	var orderNSU string
+	for k := range orders.orders {
+		orderNSU = k
+	}
+	o, _ := orders.GetByNSU(context.Background(), orderNSU)
+	if o.Status == string(OrderStatusFailed) {
+		t.Errorf("order must not be terminalized for transient error, got status %q", o.Status)
+	}
+
+	// Idempotency key must remain pending (not failed).
+	idemKey := idemLookup("tenant-001", checkoutCreateOperation, req.IdempotencyKey)
+	rec, ok := idemRepo.records[idemKey]
+	if !ok {
+		t.Fatal("idempotency record not found")
+	}
+	if rec.Status == "failed" {
+		t.Error("idempotency must not be marked failed for transient error")
 	}
 }

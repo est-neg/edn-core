@@ -10,7 +10,6 @@ import (
 // Order represents a checkout order document stored in the orders collection.
 type Order struct {
 	ID                  primitive.ObjectID `bson:"_id,omitempty"`
-	OrderID             string             `bson:"id"`
 	OrderNSU            string             `bson:"order_nsu"`
 	OrganizationID      string             `bson:"organization_id,omitempty"`
 	TenantID            string             `bson:"tenant_id,omitempty"`

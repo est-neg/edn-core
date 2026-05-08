@@ -3,6 +3,8 @@ package payments
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -66,8 +68,9 @@ func TestCreateCheckout_usesLinksEndpoint(t *testing.T) {
 	if capturedPath != "/links" {
 		t.Errorf("path: got %q, want /links", capturedPath)
 	}
-	if capturedAuth != "Bearer test-token" {
-		t.Errorf("auth header: got %q, want Bearer test-token", capturedAuth)
+	// /links must NOT carry Authorization — the handle in the payload identifies the merchant.
+	if capturedAuth != "" {
+		t.Errorf("auth header: /links must not receive Authorization, got %q", capturedAuth)
 	}
 
 	// Verify payload fields
@@ -327,6 +330,60 @@ func TestCreateCheckout_non2xxReturnsError(t *testing.T) {
 	_, err := adapter.CreateCheckout(context.Background(), InfinitePayCheckoutRequest{Handle: "h"})
 	if err == nil {
 		t.Error("expected error for non-2xx response")
+	}
+}
+
+// TestCreateCheckout_deterministic4xx_returnsProviderCreateRejectedError verifies that
+// deterministic 4xx responses from /links return a typed *ProviderCreateRejectedError
+// carrying the exact status code.
+func TestCreateCheckout_deterministic4xx_returnsProviderCreateRejectedError(t *testing.T) {
+	deterministicCodes := []int{400, 401, 402, 403, 404, 422}
+	for _, code := range deterministicCodes {
+		code := code
+		t.Run(fmt.Sprintf("status_%d", code), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(code)
+			}))
+			defer srv.Close()
+
+			adapter := newTestAdapter(t, srv.URL)
+			_, err := adapter.CreateCheckout(context.Background(), InfinitePayCheckoutRequest{Handle: "h"})
+			if err == nil {
+				t.Fatalf("status %d: expected error", code)
+			}
+			var rejErr *ProviderCreateRejectedError
+			if !errors.As(err, &rejErr) {
+				t.Fatalf("status %d: expected *ProviderCreateRejectedError, got %T: %v", code, err, err)
+			}
+			if rejErr.StatusCode != code {
+				t.Errorf("status %d: StatusCode field: got %d", code, rejErr.StatusCode)
+			}
+		})
+	}
+}
+
+// TestCreateCheckout_transientErrors_doNotReturnProviderCreateRejectedError verifies that
+// 408, 429, 5xx, and transport errors do NOT return *ProviderCreateRejectedError.
+func TestCreateCheckout_transientErrors_doNotReturnProviderCreateRejectedError(t *testing.T) {
+	transientCodes := []int{408, 429, 500, 502, 503}
+	for _, code := range transientCodes {
+		code := code
+		t.Run(fmt.Sprintf("status_%d", code), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(code)
+			}))
+			defer srv.Close()
+
+			adapter := newTestAdapter(t, srv.URL)
+			_, err := adapter.CreateCheckout(context.Background(), InfinitePayCheckoutRequest{Handle: "h"})
+			if err == nil {
+				t.Fatalf("status %d: expected error", code)
+			}
+			var rejErr *ProviderCreateRejectedError
+			if errors.As(err, &rejErr) {
+				t.Errorf("status %d: must not return *ProviderCreateRejectedError for transient code", code)
+			}
+		})
 	}
 }
 

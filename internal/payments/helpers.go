@@ -54,6 +54,15 @@ func CalculateCheckoutRequestHash(organizationSlug, tenantSlug, channel, planSlu
 	return CalculateEventHash([]byte(payload))
 }
 
+// CalculateFingerprintHash computes the SHA-256 hex digest of the business-dedup
+// fingerprint components: tenantID, normalizedCPF, planSlug, billingCycle.
+// The raw CPF must have been normalized (11 digits, no punctuation) before calling.
+// This hash is safe to use as a Redis key — no PII is stored.
+func CalculateFingerprintHash(tenantID, normalizedCPF, planSlug, billingCycle string) string {
+	payload := strings.Join([]string{tenantID, normalizedCPF, planSlug, billingCycle}, "|")
+	return CalculateEventHash([]byte(payload))
+}
+
 var reE164 = regexp.MustCompile(`^\+[1-9]\d{6,14}$`)
 var reCPFDigits = regexp.MustCompile(`^\d{11}$`)
 

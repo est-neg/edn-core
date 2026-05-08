@@ -147,6 +147,33 @@ func TestCreateCheckoutSession_InProgress_Returns409(t *testing.T) {
 	}
 }
 
+// TestCreateCheckoutSession_AlreadyOpen_Returns409 verifies that when an active open
+// order exists for the same fingerprint, the handler returns 409 with
+// error_code=checkout_already_open and leaks no session data.
+func TestCreateCheckoutSession_AlreadyOpen_Returns409(t *testing.T) {
+	orders := newFakeOrderRepo()
+	svc := newResumeTestService(orders, InfinitePayCheckoutResponse{}, ErrCheckoutAlreadyOpen)
+	h := newCheckoutHandlerWithService(svc)
+
+	rr := postCheckout(t, h, validCheckoutRequest(), "idem-already-open-key")
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var body CheckoutErrorResponse
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.ErrorCode != ErrCodeCheckoutAlreadyOpen {
+		t.Errorf("expected error_code %q, got %q", ErrCodeCheckoutAlreadyOpen, body.ErrorCode)
+	}
+	if body.CheckoutIntentKey != "" {
+		t.Errorf("expected empty checkout_intent_key in already-open response, got %q", body.CheckoutIntentKey)
+	}
+	if body.OrderNSU != "" {
+		t.Errorf("expected empty order_nsu in already-open response, got %q", body.OrderNSU)
+	}
+}
+
 // TestCreateCheckoutSession_ProviderAmbiguous_Returns503 verifies that a
 // provider-state-ambiguous error returns 503 with the correct error_code.
 func TestCreateCheckoutSession_ProviderAmbiguous_Returns503(t *testing.T) {
