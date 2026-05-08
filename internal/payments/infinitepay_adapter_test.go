@@ -77,6 +77,9 @@ func TestCreateCheckout_usesLinksEndpoint(t *testing.T) {
 	if capturedBody["handle"] != "edn-villenneve" {
 		t.Errorf("handle: got %v", capturedBody["handle"])
 	}
+	if capturedBody["order_id"] != "order-001" {
+		t.Errorf("order_id: got %v, want order-001", capturedBody["order_id"])
+	}
 	if capturedBody["redirect_url"] != "https://example.com/return" {
 		t.Errorf("redirect_url: got %v", capturedBody["redirect_url"])
 	}

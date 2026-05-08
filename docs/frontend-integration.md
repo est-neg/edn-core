@@ -252,7 +252,10 @@ Após o pagamento, a InfinitePay redireciona o usuário para:
 https://developer.funcionario.online/checkout/return?order_nsu=<order_nsu>
 ```
 
-Leia o `order_nsu` da query string e faça polling no status:
+**Estratégia de reconciliação:**
+
+- Se `checkout_intent_key` estiver presente no `sessionStorage`, **prefira reconciliar via `POST /v1/checkout/sessions/track`** para obter o `order_nsu` canônico e o status atual. Esse caminho é mais confiável porque identifica o pedido pelo handle opaco gerado no backend, independente do valor passado na query string.
+- Use `order_nsu` da query string apenas como **fallback** quando não houver sessão local (e.g. o usuário abriu o link de retorno em outro navegador ou o `sessionStorage` foi perdido).
 
 ```js
 // Exemplo em JavaScript puro
@@ -273,7 +276,27 @@ async function waitForPayment(orderNsu, maxAttempts = 20, intervalMs = 3000) {
 
 // Na página de retorno:
 const params = new URLSearchParams(window.location.search)
-const orderNsu = params.get('order_nsu') ?? sessionStorage.getItem('order_nsu')
+const intentKey = sessionStorage.getItem('checkout_intent_key')
+
+let orderNsu
+
+if (intentKey) {
+  // Caminho preferido: reconciliar via /track para obter o order_nsu canônico
+  const res = await fetch(`${API_URL}/v1/checkout/sessions/track`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ checkout_intent_key: intentKey }),
+  })
+  if (!res.ok) throw new Error(`track failed: ${res.status}`)
+  const tracked = await res.json()
+  orderNsu = tracked.order_nsu
+  // Tratar estados terminais sem polling adicional
+  if (tracked.status === 'paid') return showSuccessScreen(tracked)
+  if (tracked.status === 'failed' || tracked.status === 'expired') throw new Error(tracked.status)
+} else {
+  // Fallback: sem sessão local, usar order_nsu da query string
+  orderNsu = params.get('order_nsu') ?? sessionStorage.getItem('order_nsu')
+}
 
 waitForPayment(orderNsu)
   .then(data => {

@@ -34,6 +34,7 @@ func NewInfinitePayAdapter(baseURL, apiToken string, timeoutSec int, log *zap.Lo
 // infinitePayLinksPayload is the wire format for POST /links (InfinitePay checkout creation).
 type infinitePayLinksPayload struct {
 	Handle      string              `json:"handle"`
+	OrderID     string              `json:"order_id,omitempty"`
 	Items       []infinitePayItem   `json:"items"`
 	RedirectURL string              `json:"redirect_url"`
 	WebhookURL  string              `json:"webhook_url"`
@@ -82,6 +83,7 @@ type infinitePayPaymentCheckResponse struct {
 func (a *infinitePayAdapter) CreateCheckout(ctx context.Context, req InfinitePayCheckoutRequest) (InfinitePayCheckoutResponse, error) {
 	payload := infinitePayLinksPayload{
 		Handle:      req.Handle,
+		OrderID:     req.OrderNSU,
 		RedirectURL: req.RedirectURL,
 		WebhookURL:  req.WebhookURL,
 		Customer: infinitePayCustomer{
