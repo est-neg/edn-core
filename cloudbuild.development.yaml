@@ -160,8 +160,8 @@ steps:
           --no-invoker-iam-check \
           --execution-environment gen2 \
           --port 8080 \
-          --memory 256Mi \
-          --cpu 1 \
+          --memory 2Gi \
+          --cpu 2 \
           --concurrency 10 \
           --min-instances 0 \
           --max-instances 2 \
