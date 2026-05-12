@@ -30,7 +30,13 @@
 
 ## Remaining environment-only validations
 
-- Cloud Run trigger substitutions must be configured: `_RELAY_IMAGE`, `_PAYMENTS_API_IMAGE`, `_RELAY_SERVICE_ACCOUNT`, `_RELAY_CORE_URL_SECRET`
-- Secret Manager secret for `_RELAY_CORE_URL_SECRET` must be created pointing at `edn-core-payments-dev` reconcile URL
-- Platform request logging for `edn-webhook-dev` must be configured to redact webhook path
-- InfinitePay provider URL cutover is an ops action, not a code action
+- `_RELAY_IMAGE`, `_PAYMENTS_API_IMAGE`, `_RELAY_SERVICE_ACCOUNT` are now defined in
+  the substitutions block; no trigger configuration required for these.
+- `_RELAY_CORE_URL_SECRET` removed; `RELAY_CORE_URL` is derived at build time from the
+  deployed `edn-core-payments-dev` URL + `/internal/payments/providers/infinitepay/webhook-reconcile`
+  and injected via `--update-env-vars`.
+- Secret Manager secrets that must still exist: `edn-core-dev-payments-webhook-secret-path`
+  (for `_PAYMENTS_WEBHOOK_SECRET`) and `edn-core-dev-payments-internal-verify-auth-token`
+  (for `_PAYMENTS_INTERNAL_VERIFY_AUTH_TOKEN_SECRET`).
+- Platform request logging for `edn-webhook-dev` must be configured to redact webhook path.
+- InfinitePay provider URL cutover is an ops action, not a code action.

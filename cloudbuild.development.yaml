@@ -52,7 +52,7 @@ steps:
       - ${_WORKER_IMAGE}
 
   # ── Relay image ──────────────────────────────────────────────────────────────
-  # Substitution required in trigger: _RELAY_IMAGE (e.g. REGION-docker.pkg.dev/PROJECT/REPO/edn-webhook:$SHORT_SHA)
+  # _RELAY_IMAGE is defined in the substitutions block below.
   - name: gcr.io/cloud-builders/docker
     args:
       - build
@@ -70,7 +70,7 @@ steps:
       - ${_RELAY_IMAGE}
 
   # ── Payments-API (internal core) image ───────────────────────────────────────
-  # Substitution required in trigger: _PAYMENTS_API_IMAGE
+  # _PAYMENTS_API_IMAGE is defined in the substitutions block below.
   - name: gcr.io/cloud-builders/docker
     args:
       - build
@@ -113,7 +113,7 @@ steps:
   # Hosts /internal/payments/providers/infinitepay/webhook-reconcile.
   # MUST run with --no-allow-unauthenticated --ingress internal so it is never
   # reachable from public internet traffic.
-  # Substitution required in trigger: _PAYMENTS_API_IMAGE
+  # _PAYMENTS_API_IMAGE is defined in the substitutions block below.
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     entrypoint: bash
     args:
@@ -139,10 +139,9 @@ steps:
 
   # ── Public relay (edn-webhook-dev) ───────────────────────────────────────────
   # Thin stateless relay. Public ingress. No MongoDB. No Redis. No provider token.
-  # Substitutions required in trigger: _RELAY_IMAGE, _RELAY_SERVICE_ACCOUNT,
-  #   _RELAY_CORE_URL_SECRET (full URL of edn-core-payments-dev reconcile route).
-  # RELAY_CORE_AUDIENCE is derived from the deployed edn-core-payments-dev URL at
-  # build time; no manual trigger substitution required.
+  # _RELAY_IMAGE and _RELAY_SERVICE_ACCOUNT are defined in the substitutions block.
+  # RELAY_CORE_URL and RELAY_CORE_AUDIENCE are derived from the deployed
+  # edn-core-payments-dev service URL at build time; no trigger substitution required.
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     entrypoint: bash
     args:
@@ -150,6 +149,7 @@ steps:
       - |
         CORE_AUDIENCE=$(gcloud run services describe edn-core-payments-dev \
           --region ${_REGION} --format 'value(status.url)')
+        CORE_URL="$${CORE_AUDIENCE}/internal/payments/providers/infinitepay/webhook-reconcile"
         gcloud run deploy edn-webhook-dev \
           --image ${_RELAY_IMAGE} \
           --region ${_REGION} \
@@ -165,12 +165,12 @@ steps:
           --timeout 10 \
           --service-account ${_RELAY_SERVICE_ACCOUNT} \
           --env-vars-file deploy/env/cloudrun.relay.development.yaml \
-          --update-env-vars "RELAY_CORE_AUDIENCE=$$CORE_AUDIENCE" \
-          --set-secrets RELAY_SECRET_PATH=${_PAYMENTS_WEBHOOK_SECRET}:latest,RELAY_CORE_URL=${_RELAY_CORE_URL_SECRET}:latest,RELAY_CORE_INTERNAL_TOKEN=${_PAYMENTS_INTERNAL_VERIFY_AUTH_TOKEN_SECRET}:latest
+          --update-env-vars "RELAY_CORE_AUDIENCE=$${CORE_AUDIENCE},RELAY_CORE_URL=$${CORE_URL}" \
+          --set-secrets RELAY_SECRET_PATH=${_PAYMENTS_WEBHOOK_SECRET}:latest,RELAY_CORE_INTERNAL_TOKEN=${_PAYMENTS_INTERNAL_VERIFY_AUTH_TOKEN_SECRET}:latest
 
   # ── Grant relay SA run.invoker on the internal payments surface ───────────────
   # This binding must exist before relay-to-core traffic is enabled.
-  # Substitution required in trigger: _RELAY_SERVICE_ACCOUNT
+  # _RELAY_SERVICE_ACCOUNT is defined in the substitutions block below.
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     entrypoint: bash
     args:
@@ -216,6 +216,9 @@ substitutions:
   _ARTIFACT_REPOSITORY: edn-core
   _APP_IMAGE: ${_REGION}-docker.pkg.dev/funcionario-online-493412/${_ARTIFACT_REPOSITORY}/edn-core-dev:${SHORT_SHA}
   _WORKER_IMAGE: ${_REGION}-docker.pkg.dev/funcionario-online-493412/${_ARTIFACT_REPOSITORY}/edn-core-dev-worker:${SHORT_SHA}
+  _RELAY_IMAGE: ${_REGION}-docker.pkg.dev/funcionario-online-493412/${_ARTIFACT_REPOSITORY}/edn-webhook-dev:${SHORT_SHA}
+  _PAYMENTS_API_IMAGE: ${_REGION}-docker.pkg.dev/funcionario-online-493412/${_ARTIFACT_REPOSITORY}/edn-core-payments-dev:${SHORT_SHA}
+  _RELAY_SERVICE_ACCOUNT: edn-webhook-dev@funcionario-online-493412.iam.gserviceaccount.com
   _RUNTIME_SERVICE_ACCOUNT: edn-core-dev@funcionario-online-493412.iam.gserviceaccount.com
   _WORKER_SERVICE_ACCOUNT: edn-core-dev@funcionario-online-493412.iam.gserviceaccount.com
   _MONGODB_URI_SECRET: edn-core-dev-mongodb-uri
