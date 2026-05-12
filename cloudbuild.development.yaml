@@ -150,6 +150,9 @@ steps:
         CORE_AUDIENCE=$(gcloud run services describe edn-core-payments-dev \
           --region ${_REGION} --format 'value(status.url)')
         CORE_URL="$${CORE_AUDIENCE}/internal/payments/providers/infinitepay/webhook-reconcile"
+        cp deploy/env/cloudrun.relay.development.yaml /tmp/relay-env.yaml
+        printf 'RELAY_CORE_AUDIENCE: "%s"\nRELAY_CORE_URL: "%s"\n' \
+          "$${CORE_AUDIENCE}" "$${CORE_URL}" >> /tmp/relay-env.yaml
         gcloud run deploy edn-webhook-dev \
           --image ${_RELAY_IMAGE} \
           --region ${_REGION} \
@@ -164,8 +167,7 @@ steps:
           --max-instances 2 \
           --timeout 10 \
           --service-account ${_RELAY_SERVICE_ACCOUNT} \
-          --env-vars-file deploy/env/cloudrun.relay.development.yaml \
-          --update-env-vars "RELAY_CORE_AUDIENCE=$${CORE_AUDIENCE},RELAY_CORE_URL=$${CORE_URL}" \
+          --env-vars-file /tmp/relay-env.yaml \
           --set-secrets RELAY_SECRET_PATH=${_PAYMENTS_WEBHOOK_SECRET}:latest,RELAY_CORE_INTERNAL_TOKEN=${_PAYMENTS_INTERNAL_VERIFY_AUTH_TOKEN_SECRET}:latest
 
   # ── Grant relay SA run.invoker on the internal payments surface ───────────────
