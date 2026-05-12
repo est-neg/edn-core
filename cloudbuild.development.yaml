@@ -96,7 +96,7 @@ steps:
           --image ${_APP_IMAGE} \
           --region ${_REGION} \
           --platform managed \
-          --allow-unauthenticated \
+          --no-invoker-iam-check \
           --execution-environment gen2 \
           --port 8080 \
           --memory 512Mi \
@@ -157,7 +157,7 @@ steps:
           --image ${_RELAY_IMAGE} \
           --region ${_REGION} \
           --platform managed \
-          --allow-unauthenticated \
+          --no-invoker-iam-check \
           --execution-environment gen2 \
           --port 8080 \
           --memory 256Mi \

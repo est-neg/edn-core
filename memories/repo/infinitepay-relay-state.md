@@ -30,13 +30,17 @@
 
 ## Remaining environment-only validations
 
-- `_RELAY_IMAGE`, `_PAYMENTS_API_IMAGE`, `_RELAY_SERVICE_ACCOUNT` are now defined in
-  the substitutions block; no trigger configuration required for these.
-- `_RELAY_CORE_URL_SECRET` removed; `RELAY_CORE_URL` is derived at build time from the
-  deployed `edn-core-payments-dev` URL + `/internal/payments/providers/infinitepay/webhook-reconcile`
-  and injected via `--update-env-vars`.
-- Secret Manager secrets that must still exist: `edn-core-dev-payments-webhook-secret-path`
-  (for `_PAYMENTS_WEBHOOK_SECRET`) and `edn-core-dev-payments-internal-verify-auth-token`
-  (for `_PAYMENTS_INTERNAL_VERIFY_AUTH_TOKEN_SECRET`).
-- Platform request logging for `edn-webhook-dev` must be configured to redact webhook path.
-- InfinitePay provider URL cutover is an ops action, not a code action.
+### Verified / resolved
+
+- `_RELAY_IMAGE`, `_PAYMENTS_API_IMAGE`, `_RELAY_SERVICE_ACCOUNT` are defined in the development pipeline substitutions block.
+- `RELAY_CORE_URL` / `RELAY_CORE_AUDIENCE` are no longer injected via `--update-env-vars`; they are merged into a generated temporary env-vars YAML file during the relay deploy step.
+- `allUsers` IAM blocked by org policy; public services now use `--no-invoker-iam-check` instead of `--allow-unauthenticated`.
+- Relay runtime SA `edn-webhook-dev@funcionario-online-493412.iam.gserviceaccount.com` exists.
+- Deployer SA `edn-core-dev@funcionario-online-493412.iam.gserviceaccount.com` has `roles/iam.serviceAccountUser` on the relay SA.
+- Relay SA has `roles/secretmanager.secretAccessor` on exactly the two relay secrets (`edn-core-dev-payments-webhook-secret-path`, `edn-core-dev-payments-internal-verify-auth-token`).
+
+### Still pending (ops actions)
+
+- Platform request logging for `edn-webhook-dev` must be configured to redact the webhook path.
+- InfinitePay provider URL cutover to the relay endpoint (ops, not code).
+- End-to-end smoke validation: live InfinitePay event → relay → payments-api reconcile → correct outcome.
