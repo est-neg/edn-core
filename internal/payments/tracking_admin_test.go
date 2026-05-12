@@ -18,7 +18,7 @@ import (
 
 func newTestHandler(orders *fakeOrderRepo) *Handler {
 	statusSvc := NewOrderStatusService(orders, fakeSubscriptionRepo{}, fakeStatusCache{}, zap.NewNop())
-	return NewHandler(nil, statusSvc, nil, nil, "Bearer test-admin-token", zap.NewNop())
+	return NewHandler(nil, statusSvc, nil, nil, "Bearer test-admin-token", "", zap.NewNop())
 }
 
 // newRecoveryTestHandler creates a handler with both a CheckoutService (for recovery)
@@ -26,7 +26,7 @@ func newTestHandler(orders *fakeOrderRepo) *Handler {
 func newRecoveryTestHandler(orders *fakeOrderRepo, providerResp InfinitePayCheckoutResponse, providerErr error) *Handler {
 	checkoutSvc := newResumeTestService(orders, providerResp, providerErr)
 	statusSvc := NewOrderStatusService(orders, fakeSubscriptionRepo{}, fakeStatusCache{}, zap.NewNop())
-	return NewHandler(checkoutSvc, statusSvc, nil, nil, "Bearer test-admin-token", zap.NewNop())
+	return NewHandler(checkoutSvc, statusSvc, nil, nil, "Bearer test-admin-token", "", zap.NewNop())
 }
 
 // seedRecoverableOrder seeds an order that is active/open but has no provider_checkout_url.

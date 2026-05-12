@@ -15,7 +15,7 @@ import (
 // newCheckoutHandlerWithService builds a Handler wired to the given CheckoutService
 // for CreateCheckoutSession handler tests.
 func newCheckoutHandlerWithService(svc *CheckoutService) *Handler {
-	return NewHandler(svc, nil, nil, nil, "Bearer test-admin-token", zap.NewNop())
+	return NewHandler(svc, nil, nil, nil, "Bearer test-admin-token", "", zap.NewNop())
 }
 
 func postCheckout(t *testing.T, h *Handler, body CreateCheckoutRequest, idempotencyKey string) *httptest.ResponseRecorder {

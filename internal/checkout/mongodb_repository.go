@@ -389,6 +389,9 @@ func NewMongoOutboxEventRepository(client *mongo.Client, cfg config.MongoConfig)
 func (r *mongoOutboxEvents) Insert(ctx context.Context, event OutboxEvent) error {
 	_, err := r.coll.InsertOne(ctx, event)
 	if err != nil {
+		if mongo.IsDuplicateKeyError(err) {
+			return ErrDuplicateOutbox
+		}
 		return fmt.Errorf("insert outbox event: %w", err)
 	}
 	return nil

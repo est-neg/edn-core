@@ -42,9 +42,6 @@ func main() {
 	if cfg.MongoDB.URI == "" {
 		log.Fatal("mongodb uri is required")
 	}
-	if cfg.Payments.WebhookSecretPath == "" {
-		log.Fatal("payments.webhook_secret_path is required")
-	}
 	if cfg.Payments.InfinitePay.APIToken == "" {
 		log.Fatal("payments.infinitepay.api_token is required")
 	}
@@ -108,7 +105,7 @@ func main() {
 	planSvc := payments.NewPlanQueryService(versionedPlanRepo, organizationRepo, tenantRepo, log)
 	webhookSvc := payments.NewWebhookService(orderRepo, paymentRepo, subRepo, webhookRepo, outboxRepo, storeAdapter, storeAdapter, storeAdapter, infinitePayClient, log)
 
-	handler := payments.NewHandler(checkoutSvc, statusSvc, planSvc, webhookSvc, cfg.HTTP.AdminAuthToken, log)
+	handler := payments.NewHandler(checkoutSvc, statusSvc, planSvc, webhookSvc, cfg.HTTP.AdminAuthToken, cfg.Payments.InternalVerifyAuthToken, log)
 
 	// --- Router ---
 	r := chi.NewRouter()
@@ -124,8 +121,15 @@ func main() {
 	r.Get("/v1/orders/{orderNSU}/status", handler.GetOrderStatus)
 	r.Method(http.MethodPost, "/api/v1/orders/search",
 		payments.NewAdminSearchRateLimiter(log)(http.HandlerFunc(handler.SearchOrdersByDocument)))
-	// Webhook route uses exact secret path — NOT a URL parameter
-	r.Post("/v1/webhooks/infinitepay/"+cfg.Payments.WebhookSecretPath, handler.HandleWebhook)
+	// NOTE: The legacy public InfinitePay webhook route has been removed from this surface.
+	// Public provider webhook ingress belongs exclusively to cmd/webhook-relay (edn-webhook-dev).
+
+	// Internal reconcile route — NOT a public endpoint. Must only be reachable from
+	// authenticated callers (Cloud Run IAM service-to-service auth from edn-webhook-dev).
+	// The X-EDN-Internal-Token header is a secondary defense-in-depth control.
+	// DEPLOY GATE: this cmd must run on a Cloud Run surface with --no-allow-unauthenticated
+	// and --ingress internal before relay-to-core traffic is enabled.
+	r.Post("/internal/payments/providers/infinitepay/webhook-reconcile", handler.HandleWebhookReconcile)
 
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

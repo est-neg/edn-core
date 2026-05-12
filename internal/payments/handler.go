@@ -1,6 +1,7 @@
 package payments
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -11,28 +12,38 @@ import (
 	"go.uber.org/zap"
 )
 
+// webhookRunner is the minimal interface required by HandleWebhook and HandleWebhookReconcile.
+// *WebhookService satisfies this interface; a thin fake can be used in handler tests.
+type webhookRunner interface {
+	Handle(ctx context.Context, rawBody []byte) error
+}
+
 // Handler holds all HTTP handlers for the payments API.
 type Handler struct {
-	checkout  *CheckoutService
-	status    *OrderStatusService
-	plans     *PlanQueryService
-	webhook   *WebhookService
-	authToken string // full Authorization header value expected for admin endpoints
-	log       *zap.Logger
+	checkout      *CheckoutService
+	status        *OrderStatusService
+	plans         *PlanQueryService
+	webhook       webhookRunner
+	authToken     string // full Authorization header value expected for admin endpoints
+	internalToken string // optional defense-in-depth token for internal reconcile route (IAM is primary)
+	log           *zap.Logger
 }
 
 // NewHandler constructs a Handler with all required services injected.
 // adminAuthToken is the full expected Authorization header value for admin endpoints
 // (e.g. "Bearer <token>"). Constant-time compared on each admin request.
+// internalToken is an optional secondary token for the internal reconcile route.
+// IAM service-to-service auth is the primary control; this token is defense-in-depth only.
 func NewHandler(
 	checkout *CheckoutService,
 	status *OrderStatusService,
 	plans *PlanQueryService,
 	webhook *WebhookService,
 	adminAuthToken string,
+	internalToken string,
 	log *zap.Logger,
 ) *Handler {
-	return &Handler{checkout: checkout, status: status, plans: plans, webhook: webhook, authToken: adminAuthToken, log: log}
+	return &Handler{checkout: checkout, status: status, plans: plans, webhook: webhook, authToken: adminAuthToken, internalToken: internalToken, log: log}
 }
 
 func checkoutErrorResponse(err error, fallback CheckoutErrorResponse) CheckoutErrorResponse {
@@ -341,4 +352,73 @@ func (h *Handler) SearchOrdersByDocument(w http.ResponseWriter, r *http.Request)
 		zap.String("metric", "admin_cpf_search"),
 	)
 	writeJSON(w, http.StatusOK, AdminOrderSearchResponse{Orders: orders})
+}
+
+// HandleWebhookReconcile handles POST /internal/payments/providers/infinitepay/webhook-reconcile.
+// This is the authenticated-only internal surface for the relay-to-core hop.
+// Primary authentication is Cloud Run service-to-service IAM; the X-EDN-Internal-Token header
+// is a secondary defense-in-depth control validated when internalToken is configured.
+//
+// Response classification:
+//   - 200: reconciliation successful or idempotent duplicate — relay returns 200 to provider
+//   - 422: deterministic failure (transaction mismatch, amount mismatch, order not found,
+//     invalid payload) — relay returns 422 to provider
+//   - 503: temporary failure (lock conflict) — relay returns 400 to provider under transition policy
+//   - 500: unexpected error — relay returns 400 to provider under transition policy
+//
+// This route MUST NOT appear in public OpenAPI docs or be exposed on a public-internet surface.
+func (h *Handler) HandleWebhookReconcile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Secondary defense-in-depth token check.
+	// Cloud Run IAM is the primary control and is enforced at the infrastructure level.
+	if h.internalToken != "" {
+		got := r.Header.Get("X-EDN-Internal-Token")
+		if subtle.ConstantTimeCompare([]byte(got), []byte(h.internalToken)) != 1 {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+	}
+
+	ct := r.Header.Get("Content-Type")
+	if !strings.HasPrefix(ct, "application/json") {
+		writeJSON(w, http.StatusUnsupportedMediaType, map[string]string{"error": "content-type must be application/json"})
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
+	rawBody, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if len(rawBody) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "empty body"})
+		return
+	}
+
+	err = h.webhook.Handle(r.Context(), rawBody)
+	if err != nil {
+		// Deterministic integrity failures → 422 (relay exposes 422 to provider)
+		if errors.Is(err, ErrInvalidRequest) ||
+			errors.Is(err, ErrTransactionMismatch) ||
+			errors.Is(err, ErrAmountMismatch) ||
+			errors.Is(err, ErrOrderNotFound) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+			return
+		}
+		// Temporary failures → 503 (relay maps to provider-facing 400 under transition policy)
+		if errors.Is(err, ErrLockConflict) {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "temporary_failure"})
+			return
+		}
+		// Unexpected errors → 500 (relay maps to provider-facing 400 under transition policy)
+		h.log.Error("webhook reconcile failed", zap.Error(err))
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal_error"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

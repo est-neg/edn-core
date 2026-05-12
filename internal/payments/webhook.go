@@ -3,6 +3,7 @@ package payments
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -100,6 +101,9 @@ func (s *WebhookService) Handle(ctx context.Context, rawBody []byte) error {
 	// Step 3: Acquire distributed order lock
 	lockToken := uuid.New().String()
 	if err := s.lock.AcquireOrderLock(ctx, minimal.OrderNSU, lockToken); err != nil {
+		if errors.Is(err, checkout.ErrLockNotAcquired) {
+			return fmt.Errorf("%w: order %s", ErrLockConflict, minimal.OrderNSU)
+		}
 		return fmt.Errorf("acquire lock for order %s: %w", minimal.OrderNSU, err)
 	}
 	defer s.lock.ReleaseOrderLock(ctx, minimal.OrderNSU, lockToken) //nolint:errcheck
@@ -132,10 +136,41 @@ func (s *WebhookService) Handle(ctx context.Context, rawBody []byte) error {
 		return fmt.Errorf("verify payment: %w", err)
 	}
 
+	// Step 6a: Canonical transaction identity check (webhook hint vs. provider-verified).
+	// verified.TransactionNSU is the canonical ID returned by payment_check.
+	// minimal.TransactionNSU is only a lookup hint from the webhook payload — never canonical truth.
+	if minimal.TransactionNSU != "" && verified.TransactionNSU != "" &&
+		minimal.TransactionNSU != verified.TransactionNSU {
+		return fmt.Errorf("%w: webhook transaction_id does not match provider-verified canonical transaction_id",
+			ErrTransactionMismatch)
+	}
+
+	// Step 6b: Persisted canonical transaction identity check.
+	// If core already has a payment for this order with a different transaction_nsu, reject.
+	if verified.TransactionNSU != "" {
+		existingPayments, lookupErr := s.payments.GetByOrderNSU(ctx, minimal.OrderNSU)
+		if lookupErr != nil {
+			return fmt.Errorf("check canonical transaction identity: %w", lookupErr)
+		}
+		for _, p := range existingPayments {
+			if p.TransactionNSU != verified.TransactionNSU {
+				return fmt.Errorf("%w: persisted canonical transaction_nsu does not match provider-verified canonical transaction_id",
+					ErrTransactionMismatch)
+			}
+		}
+		// If no existing payment, the verified transaction ID becomes canonical on upsert below.
+	}
+
+	// Step 7: Amount validation — hard integrity gate; no mutation is permitted on mismatch.
+	if verified.PaidAmountCents != order.AmountCents {
+		return fmt.Errorf("%w: order expects %d cents, provider verified %d cents",
+			ErrAmountMismatch, order.AmountCents, verified.PaidAmountCents)
+	}
+
 	now := time.Now().UTC()
 	rawBSON, _ := bson.Marshal(bson.M{"raw": string(rawBody)})
 
-	// Step 7: Persist raw webhook event
+	// Step 8: Persist raw webhook event (renumbered after hardening steps 6a/6b/7 above)
 	if !hasExistingEvent {
 		webhookEvent = checkout.WebhookEvent{
 			EventID:        uuid.New().String(),
@@ -156,21 +191,21 @@ func (s *WebhookService) Handle(ctx context.Context, rawBody []byte) error {
 		}
 	}
 
-	// Step 8: Set Redis dedup keys
+	// Step 9: Set Redis dedup keys
 	s.idem.SetWebhookTxSeen(ctx, minimal.TransactionNSU) //nolint:errcheck
 	s.idem.SetWebhookHashSeen(ctx, eventHash)            //nolint:errcheck
 
-	// Step 9: Amount validation — tolerance is ZERO
-	amountMatch := verified.PaidAmountCents == order.AmountCents
-
+	// Amount match is guaranteed by the hard gate in Step 7 above.
 	paymentStatus := verified.Status
-	orderStatus := mapPaymentToOrderStatus(verified.Status, amountMatch)
+	orderStatus := mapPaymentToOrderStatus(verified.Status)
 
-	// Step 10: Upsert payment
+	// Step 10: Upsert payment — canonical transaction_nsu is strictly the provider-verified value.
+	// The adapter guarantees non-empty; the webhook hint is never a fallback for canonical identity.
+	canonicalTransactionNSU := verified.TransactionNSU
 	payment := checkout.Payment{
 		PaymentID:       uuid.New().String(),
 		OrderNSU:        minimal.OrderNSU,
-		TransactionNSU:  minimal.TransactionNSU,
+		TransactionNSU:  canonicalTransactionNSU,
 		InvoiceSlug:     minimal.InvoiceSlug,
 		AmountCents:     order.AmountCents,
 		PaidAmountCents: verified.PaidAmountCents,
@@ -184,15 +219,19 @@ func (s *WebhookService) Handle(ctx context.Context, rawBody []byte) error {
 		return fmt.Errorf("upsert payment: %w", err)
 	}
 
-	// Step 11: Update order status
+	// Step 11: Update order status — failure is not safe to ignore; returning success to the
+	// provider when durable state has not been applied would create a false-success signal.
 	if err := s.orders.UpdateStatus(ctx, minimal.OrderNSU, orderStatus, now); err != nil {
-		s.log.Error("failed to update order status", zap.String("order_nsu", minimal.OrderNSU), zap.Error(err))
+		return fmt.Errorf("update order status: %w", err)
 	}
 
-	// Step 12: If approved and amount matches, enqueue outbox event for worker
-	if verified.Status == PaymentStatusApproved && amountMatch {
+	// Step 12: If approved, enqueue outbox event for worker.
+	// Amount match is enforced as a hard gate above — this path is reached only on exact match.
+	// The outbox EventID is derived deterministically from webhookEvent.EventID so that retries
+	// produce the same ID and ErrDuplicateOutbox can be treated as a successful no-op.
+	if verified.Status == PaymentStatusApproved {
 		event := PaymentApprovedEvent{
-			EventID:         uuid.New().String(),
+			EventID:         uuid.NewSHA1(uuid.Nil, []byte("payment.approved:"+webhookEvent.EventID)).String(),
 			OrderNSU:        minimal.OrderNSU,
 			TransactionNSU:  minimal.TransactionNSU,
 			PlanSlug:        order.PlanSlug,
@@ -204,15 +243,19 @@ func (s *WebhookService) Handle(ctx context.Context, rawBody []byte) error {
 		}
 		eventPayload, _ := json.Marshal(event)
 		outboxEvt := checkout.OutboxEvent{
-			EventID:   uuid.New().String(),
+			EventID:   uuid.NewSHA1(uuid.Nil, []byte("outbox.payment.approved:"+webhookEvent.EventID)).String(),
 			EventType: "payment.approved",
 			Payload:   eventPayload,
 			Published: false,
 			CreatedAt: now,
 		}
 		if err := s.outbox.Insert(ctx, outboxEvt); err != nil {
-			// Outbox failure is logged but does not fail the webhook response
-			s.log.Error("failed to enqueue outbox event", zap.String("order_nsu", minimal.OrderNSU), zap.Error(err))
+			if err == checkout.ErrDuplicateOutbox {
+				// Idempotent retry: event already enqueued on a previous attempt — treat as success.
+				s.log.Info("outbox event already enqueued (duplicate), skipping", zap.String("order_nsu", minimal.OrderNSU))
+			} else {
+				return fmt.Errorf("enqueue outbox event: %w", err)
+			}
 		}
 	}
 
@@ -249,10 +292,7 @@ func selectWebhookEventForProcessing(events []checkout.WebhookEvent) (bool, *che
 	return false, &selected
 }
 
-func mapPaymentToOrderStatus(ps PaymentStatus, amountMatch bool) OrderStatus {
-	if !amountMatch {
-		return OrderStatusPendingReview
-	}
+func mapPaymentToOrderStatus(ps PaymentStatus) OrderStatus {
 	switch ps {
 	case PaymentStatusApproved:
 		return OrderStatusPaid

@@ -17,6 +17,16 @@ var (
 	ErrCheckoutConflict     = errors.New("payments: checkout idempotency conflict")
 	ErrCheckoutInProgress   = errors.New("payments: checkout already in progress")
 
+	// ErrTransactionMismatch is returned when the provider-verified transaction ID
+	// does not match the webhook hint or an already-persisted canonical transaction_nsu.
+	// This is a hard integrity gate — no payment or order mutation is permitted.
+	ErrTransactionMismatch = errors.New("payments: transaction identity mismatch")
+
+	// ErrLockConflict is returned when distributed order lock acquisition fails due to
+	// a concurrent reconcile attempt. This is a temporary failure that must map to 5xx
+	// so that the relay returns provider-facing 400 for retry.
+	ErrLockConflict = errors.New("payments: lock acquisition conflict")
+
 	// ErrCheckoutAlreadyOpen is returned on public create when an active open order
 	// with the same tenant+CPF+plan fingerprint already exists. No session data is
 	// leaked. Maps to 409.

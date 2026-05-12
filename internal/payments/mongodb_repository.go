@@ -105,6 +105,10 @@ func (r *paymentRepo) GetByTransactionNSU(ctx context.Context, transactionNSU st
 	return r.inner.FindByTransactionNSU(ctx, transactionNSU)
 }
 
+func (r *paymentRepo) GetByOrderNSU(ctx context.Context, orderNSU string) ([]checkout.Payment, error) {
+	return r.inner.FindByOrderNSU(ctx, orderNSU)
+}
+
 // subscriptionRepo adapts checkout.SubscriptionRepository to payments.SubscriptionRepository.
 type subscriptionRepo struct {
 	inner checkout.SubscriptionRepository

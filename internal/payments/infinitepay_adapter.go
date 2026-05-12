@@ -196,6 +196,14 @@ func (a *infinitePayAdapter) VerifyPayment(ctx context.Context, invoiceSlug, ord
 		return InfinitePayVerifyResponse{}, fmt.Errorf("decode verify response: %w", err)
 	}
 
+	// Guard: canonical transaction ID must be present in the verify response.
+	// A missing transaction_id means payment_check cannot provide reconciliation identity.
+	// Accepting an empty value here would allow the webhook hint to silently become canonical
+	// downstream — a direct violation of the Story 4 invariant.
+	if providerResp.TransactionID == "" {
+		return InfinitePayVerifyResponse{}, fmt.Errorf("provider verify response missing transaction_id: cannot reconcile payment without canonical transaction identity")
+	}
+
 	return InfinitePayVerifyResponse{
 		ProviderStatus:  providerResp.Status,
 		Status:          mapInfinitePayStatus(providerResp.Status),

@@ -56,6 +56,10 @@ type OrderRepository interface {
 type PaymentRepository interface {
 	Upsert(ctx context.Context, payment checkout.Payment) error
 	GetByTransactionNSU(ctx context.Context, transactionNSU string) (*checkout.Payment, error)
+	// GetByOrderNSU returns all payments for the given order NSU.
+	// Used to verify that no previously-persisted canonical transaction_nsu conflicts
+	// with the provider-verified transaction ID before allowing mutation.
+	GetByOrderNSU(ctx context.Context, orderNSU string) ([]checkout.Payment, error)
 }
 
 // SubscriptionRepository is the write/read port for subscriptions.

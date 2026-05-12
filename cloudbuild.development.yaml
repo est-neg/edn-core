@@ -16,8 +16,8 @@ steps:
     args:
       - -ceu
       - |
-        go test -short -count=1 -timeout 120s ./internal/payments/... ./internal/platform/config/...
-        CGO_ENABLED=0 GOOS=linux go build -trimpath ./cmd/app ./cmd/subscription-worker ./cmd/payments-api
+        go test -short -count=1 -timeout 120s ./internal/payments/... ./internal/webhookrelay/... ./internal/platform/config/...
+        CGO_ENABLED=0 GOOS=linux go build -trimpath ./cmd/app ./cmd/subscription-worker ./cmd/payments-api ./cmd/webhook-relay
 
   - name: gcr.io/cloud-builders/docker
     args:
@@ -51,6 +51,42 @@ steps:
       - push
       - ${_WORKER_IMAGE}
 
+  # ── Relay image ──────────────────────────────────────────────────────────────
+  # Substitution required in trigger: _RELAY_IMAGE (e.g. REGION-docker.pkg.dev/PROJECT/REPO/edn-webhook:$SHORT_SHA)
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - deploy/docker/Dockerfile
+      - --build-arg
+      - GO_BUILD_TARGET=./cmd/webhook-relay
+      - -t
+      - ${_RELAY_IMAGE}
+      - .
+
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_RELAY_IMAGE}
+
+  # ── Payments-API (internal core) image ───────────────────────────────────────
+  # Substitution required in trigger: _PAYMENTS_API_IMAGE
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - deploy/docker/Dockerfile
+      - --build-arg
+      - GO_BUILD_TARGET=./cmd/payments-api
+      - -t
+      - ${_PAYMENTS_API_IMAGE}
+      - .
+
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_PAYMENTS_API_IMAGE}
+
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     entrypoint: bash
     args:
@@ -71,7 +107,79 @@ steps:
           --timeout 300 \
           --service-account ${_RUNTIME_SERVICE_ACCOUNT} \
           --env-vars-file deploy/env/cloudrun.development.yaml \
-          --set-secrets VIL_MONGODB_URI=${_MONGODB_URI_SECRET}:latest,VIL_LEADS_AUTH_TOKEN=${_LEADS_AUTH_TOKEN_SECRET}:latest,VIL_REDIS_PASSWORD=${_REDIS_PASSWORD_SECRET}:latest,VIL_PAYMENTS_WEBHOOK_SECRET_PATH=${_PAYMENTS_WEBHOOK_SECRET}:latest,VIL_PAYMENTS_INTERNAL_VERIFY_AUTH_TOKEN=${_PAYMENTS_INTERNAL_VERIFY_AUTH_TOKEN_SECRET}:latest,VIL_PAYMENTS_INFINITEPAY_API_TOKEN=${_PAYMENTS_INFINITEPAY_API_TOKEN_SECRET}:latest,VIL_PAYMENTS_WEBHOOK_URL=${_PAYMENTS_WEBHOOK_URL_SECRET}:latest
+          --set-secrets VIL_MONGODB_URI=${_MONGODB_URI_SECRET}:latest,VIL_LEADS_AUTH_TOKEN=${_LEADS_AUTH_TOKEN_SECRET}:latest,VIL_REDIS_PASSWORD=${_REDIS_PASSWORD_SECRET}:latest,VIL_PAYMENTS_INFINITEPAY_API_TOKEN=${_PAYMENTS_INFINITEPAY_API_TOKEN_SECRET}:latest,VIL_PAYMENTS_WEBHOOK_URL=${_PAYMENTS_WEBHOOK_URL_SECRET}:latest
+
+  # ── Internal payments-API surface (authenticated only) ───────────────────────
+  # Hosts /internal/payments/providers/infinitepay/webhook-reconcile.
+  # MUST run with --no-allow-unauthenticated --ingress internal so it is never
+  # reachable from public internet traffic.
+  # Substitution required in trigger: _PAYMENTS_API_IMAGE
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        gcloud run deploy edn-core-payments-dev \
+          --image ${_PAYMENTS_API_IMAGE} \
+          --region ${_REGION} \
+          --platform managed \
+          --no-allow-unauthenticated \
+          --ingress internal \
+          --execution-environment gen2 \
+          --port 8080 \
+          --memory 512Mi \
+          --cpu 1 \
+          --concurrency 10 \
+          --min-instances 1 \
+          --max-instances 1 \
+          --timeout 300 \
+          --service-account ${_RUNTIME_SERVICE_ACCOUNT} \
+          --env-vars-file deploy/env/cloudrun.development.yaml \
+          --set-secrets VIL_MONGODB_URI=${_MONGODB_URI_SECRET}:latest,VIL_REDIS_PASSWORD=${_REDIS_PASSWORD_SECRET}:latest,VIL_PAYMENTS_INTERNAL_VERIFY_AUTH_TOKEN=${_PAYMENTS_INTERNAL_VERIFY_AUTH_TOKEN_SECRET}:latest,VIL_PAYMENTS_INFINITEPAY_API_TOKEN=${_PAYMENTS_INFINITEPAY_API_TOKEN_SECRET}:latest,VIL_PAYMENTS_WEBHOOK_URL=${_PAYMENTS_WEBHOOK_URL_SECRET}:latest
+
+  # ── Public relay (edn-webhook-dev) ───────────────────────────────────────────
+  # Thin stateless relay. Public ingress. No MongoDB. No Redis. No provider token.
+  # Substitutions required in trigger: _RELAY_IMAGE, _RELAY_SERVICE_ACCOUNT,
+  #   _RELAY_CORE_URL_SECRET (full URL of edn-core-payments-dev reconcile route).
+  # RELAY_CORE_AUDIENCE is derived from the deployed edn-core-payments-dev URL at
+  # build time; no manual trigger substitution required.
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        CORE_AUDIENCE=$(gcloud run services describe edn-core-payments-dev \
+          --region ${_REGION} --format 'value(status.url)')
+        gcloud run deploy edn-webhook-dev \
+          --image ${_RELAY_IMAGE} \
+          --region ${_REGION} \
+          --platform managed \
+          --allow-unauthenticated \
+          --execution-environment gen2 \
+          --port 8080 \
+          --memory 256Mi \
+          --cpu 1 \
+          --concurrency 10 \
+          --min-instances 0 \
+          --max-instances 2 \
+          --timeout 10 \
+          --service-account ${_RELAY_SERVICE_ACCOUNT} \
+          --env-vars-file deploy/env/cloudrun.relay.development.yaml \
+          --update-env-vars "RELAY_CORE_AUDIENCE=${CORE_AUDIENCE}" \
+          --set-secrets RELAY_SECRET_PATH=${_PAYMENTS_WEBHOOK_SECRET}:latest,RELAY_CORE_URL=${_RELAY_CORE_URL_SECRET}:latest,RELAY_CORE_INTERNAL_TOKEN=${_PAYMENTS_INTERNAL_VERIFY_AUTH_TOKEN_SECRET}:latest
+
+  # ── Grant relay SA run.invoker on the internal payments surface ───────────────
+  # This binding must exist before relay-to-core traffic is enabled.
+  # Substitution required in trigger: _RELAY_SERVICE_ACCOUNT
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        gcloud run services add-iam-policy-binding edn-core-payments-dev \
+          --region ${_REGION} \
+          --member serviceAccount:${_RELAY_SERVICE_ACCOUNT} \
+          --role roles/run.invoker
 
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     entrypoint: bash
@@ -98,6 +206,9 @@ steps:
 
 images:
   - ${_APP_IMAGE}
+  - ${_WORKER_IMAGE}
+  - ${_RELAY_IMAGE}
+  - ${_PAYMENTS_API_IMAGE}
   - ${_WORKER_IMAGE}
 
 substitutions:

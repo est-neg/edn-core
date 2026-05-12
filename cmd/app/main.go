@@ -51,9 +51,6 @@ func main() {
 	if cfg.Leads.AuthToken == "" {
 		log.Fatal("leads auth token is required")
 	}
-	if cfg.Payments.WebhookSecretPath == "" {
-		log.Fatal("payments.webhook_secret_path is required")
-	}
 	if cfg.Payments.InfinitePay.APIToken == "" {
 		log.Fatal("payments.infinitepay.api_token is required")
 	}
@@ -136,7 +133,7 @@ func main() {
 		storeAdapter, storeAdapter, storeAdapter,
 		ipClient, log,
 	)
-	paymentsHandler := payments.NewHandler(checkoutSvc, statusSvc, planSvc, webhookSvc, cfg.HTTP.AdminAuthToken, log)
+	paymentsHandler := payments.NewHandler(checkoutSvc, statusSvc, planSvc, webhookSvc, cfg.HTTP.AdminAuthToken, "", log)
 
 	// ── Router ──────────────────────────────────────────────────────────────
 	r := chi.NewRouter()
@@ -179,8 +176,9 @@ func main() {
 	r.Method(http.MethodPost, "/v1/checkout/sessions/track", trackLimiter(http.HandlerFunc(paymentsHandler.TrackCheckoutSession)))
 	r.Get("/v1/orders/{orderNSU}/status", paymentsHandler.GetOrderStatus)
 	r.Method(http.MethodPost, "/api/v1/orders/search", adminSearchLimiter(http.HandlerFunc(paymentsHandler.SearchOrdersByDocument)))
-	// Webhook route uses a secret path segment — NOT a URL parameter — to prevent enumeration.
-	r.Post("/v1/webhooks/infinitepay/"+cfg.Payments.WebhookSecretPath, paymentsHandler.HandleWebhook)
+	// NOTE: The public InfinitePay webhook route has been retired from this surface.
+	// Public provider webhook ingress now belongs exclusively to cmd/webhook-relay (edn-webhook-dev).
+	// The internal reconcile route is mounted only on the authenticated payments-api surface (cmd/payments-api).
 
 	// ── HTTP server ─────────────────────────────────────────────────────────
 	srv := &http.Server{

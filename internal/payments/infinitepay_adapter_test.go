@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"go.uber.org/zap"
@@ -275,9 +276,11 @@ func TestVerifyPayment_omitsEmptyIdentifiers(t *testing.T) {
 		json.Unmarshal(b, &capturedBody) //nolint:errcheck
 
 		w.Header().Set("Content-Type", "application/json")
+		// Return a non-empty transaction_id so the adapter's identity guard passes.
+		// This test is about REQUEST payload serialization (omitempty), not response content.
 		json.NewEncoder(w).Encode(map[string]string{ //nolint:errcheck
 			"status":         "pending",
-			"transaction_id": "",
+			"transaction_id": "tx-lookup-only",
 		})
 	}))
 	defer srv.Close()
@@ -401,5 +404,31 @@ func TestVerifyPayment_non2xxReturnsError(t *testing.T) {
 	_, err := adapter.VerifyPayment(context.Background(), "inv", "ord", "txn")
 	if err == nil {
 		t.Error("expected error for non-2xx response")
+	}
+}
+
+// TestVerifyPayment_emptyTransactionID_ReturnsError verifies that a provider verify
+// response with an empty transaction_id is rejected by the adapter.
+// An empty canonical ID would allow the webhook hint to silently become the persisted
+// transaction_nsu, violating the Story 4 reconciliation invariant.
+func TestVerifyPayment_emptyTransactionID_ReturnsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// Provider omits or empties transaction_id — adapter must reject this.
+		json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
+			"status":            "approved",
+			"transaction_id":    "",
+			"paid_amount_cents": 9900,
+		})
+	}))
+	defer srv.Close()
+
+	adapter := newTestAdapter(t, srv.URL)
+	_, err := adapter.VerifyPayment(context.Background(), "inv-001", "order-001", "tx-hint")
+	if err == nil {
+		t.Fatal("expected error when provider verify response has empty transaction_id, got nil")
+	}
+	if !strings.Contains(err.Error(), "missing transaction_id") {
+		t.Errorf("expected error message to contain 'missing transaction_id', got: %v", err)
 	}
 }
