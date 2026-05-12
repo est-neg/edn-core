@@ -165,7 +165,7 @@ steps:
           --timeout 10 \
           --service-account ${_RELAY_SERVICE_ACCOUNT} \
           --env-vars-file deploy/env/cloudrun.relay.development.yaml \
-          --update-env-vars "RELAY_CORE_AUDIENCE=${CORE_AUDIENCE}" \
+          --update-env-vars "RELAY_CORE_AUDIENCE=$$CORE_AUDIENCE" \
           --set-secrets RELAY_SECRET_PATH=${_PAYMENTS_WEBHOOK_SECRET}:latest,RELAY_CORE_URL=${_RELAY_CORE_URL_SECRET}:latest,RELAY_CORE_INTERNAL_TOKEN=${_PAYMENTS_INTERNAL_VERIFY_AUTH_TOKEN_SECRET}:latest
 
   # ── Grant relay SA run.invoker on the internal payments surface ───────────────
