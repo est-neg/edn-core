@@ -40,7 +40,9 @@ VIL_REDIS_POOL_SIZE=10
 VIL_PAYMENTS_WEBHOOK_SECRET_PATH=local-test-secret
 VIL_PAYMENTS_INTERNAL_VERIFY_AUTH_TOKEN=local-internal-token
 VIL_PAYMENTS_INFINITEPAY_API_TOKEN=REPLACE_ME_INFINITEPAY_API_TOKEN
-VIL_PAYMENTS_WEBHOOK_URL=http://localhost:8080/v1/webhooks/infinitepay/local-test-secret
+# In deployed environments InfinitePay must reach the public relay, not localhost.
+# Pattern: https://<relay-host>/v1/webhooks/infinitepay/<secret-path>
+VIL_PAYMENTS_WEBHOOK_URL=https://<relay-host>/v1/webhooks/infinitepay/<secret-path>
 VIL_PAYMENTS_REDIRECT_URL=https://developer.funcionario.online/checkout/return
 VIL_PAYMENTS_REQUEST_BODY_MAX_BYTES=65536
 VIL_PAYMENTS_OUTBOX_DISPATCH_INTERVAL_SEC=30
@@ -89,3 +91,22 @@ RELAY_FORWARD_TIMEOUT_SEC=3
 RELAY_SOURCE_MAX_IN_FLIGHT=8
 RELAY_SOURCE_RPM=120
 RELAY_GLOBAL_MAX_IN_FLIGHT=32
+
+# ── Meta WhatsApp services (cmd/meta-whatsapp-api and cmd/meta-whatsapp-webhook) ───────────
+# Run the internal intake API on a dedicated port first:
+#   VIL_HTTP_ADDR=:8083 go run ./cmd/meta-whatsapp-api
+#
+# Then run the public webhook relay on another port (it forwards to the API above):
+#   VIL_HTTP_ADDR=:8084 go run ./cmd/meta-whatsapp-webhook
+#
+# VIL_WHATSAPP_META_INTERNAL_INTAKE_URL must point at the cmd/meta-whatsapp-api instance.
+# VIL_WHATSAPP_META_INTERNAL_AUDIENCE is used only in deployed Cloud Run environments;
+# leave it empty for local dev (no GCP metadata server).
+VIL_WHATSAPP_META_VERIFY_TOKEN=local-whatsapp-verify-token-change-me
+VIL_WHATSAPP_META_APP_SECRET=REPLACE_ME_WHATSAPP_META_APP_SECRET
+VIL_WHATSAPP_META_INTERNAL_VERIFY_AUTH_TOKEN=local-whatsapp-internal-token
+VIL_WHATSAPP_META_INTERNAL_INTAKE_URL=http://localhost:8083/internal/whatsapp/meta/messages/intake
+VIL_WHATSAPP_META_INTERNAL_AUDIENCE=
+VIL_WHATSAPP_META_BODY_MAX_BYTES=3145728
+VIL_MONGODB_COLLECTION_WHATSAPP_MESSAGE_RECEIPTS=whatsapp_message_receipts
+VIL_MONGODB_COLLECTION_WHATSAPP_MESSAGE_DEDUPE=whatsapp_message_dedupe

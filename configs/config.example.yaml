@@ -25,6 +25,8 @@ mongodb:
   collection_subscriptions: "subscriptions"
   collection_webhook_events: "webhook_events"
   collection_outbox_events: "outbox_events"
+  collection_whatsapp_message_receipts: "whatsapp_message_receipts"
+  collection_whatsapp_message_dedupe: "whatsapp_message_dedupe"
 
 redis:
   # addr loaded from VIL_REDIS_ADDR — use Memorystore private IP in production.
@@ -38,7 +40,10 @@ redis:
   pool_size: 10
 
 payments:
-  # webhook_url loaded from VIL_PAYMENTS_WEBHOOK_URL env var — contains secret path, never commit here.
+  # webhook_url loaded from VIL_PAYMENTS_WEBHOOK_URL env var.
+  # Must be the public relay endpoint in deployed environments:
+  #   https://<relay-host>/v1/webhooks/infinitepay/<secret-path>
+  # The <secret-path> segment is a secret; never commit a real value here.
   webhook_url: ""
   # redirect_url é a URL pública para onde a InfinitePay redireciona o cliente após o checkout.
   # Dev: https://developer.funcionario.online/checkout/return
@@ -75,3 +80,21 @@ leads:
   # Optional: webhook URL for lead notifications. Leave empty to disable.
   notification_webhook_url: ""
   notification_timeout_sec: 10
+
+whatsapp_meta:
+  # verify_token loaded from VIL_WHATSAPP_META_VERIFY_TOKEN — never commit real values here.
+  verify_token: ""
+  # app_secret loaded from VIL_WHATSAPP_META_APP_SECRET — never commit real values here.
+  app_secret: ""
+  # internal_verify_auth_token loaded from VIL_WHATSAPP_META_INTERNAL_VERIFY_AUTH_TOKEN.
+  # IAM service-to-service auth is the primary control; this is optional defense-in-depth.
+  internal_verify_auth_token: ""
+  # body_max_bytes: maximum accepted payload in bytes (default 3 MiB).
+  body_max_bytes: 3145728
+  # internal_intake_url: full URL of the intake route on meta-whatsapp-api.
+  # Derived at deploy time in cloudbuild. Example:
+  #   https://<meta-whatsapp-api-host>/internal/whatsapp/meta/messages/intake
+  internal_intake_url: ""
+  # internal_audience: Cloud Run service base URL used as OIDC audience.
+  # Leave empty for local development (no GCP metadata server available).
+  internal_audience: ""

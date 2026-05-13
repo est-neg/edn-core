@@ -9,13 +9,36 @@ import (
 
 // Config is the top-level application configuration.
 type Config struct {
-	HTTP     HTTPConfig     `mapstructure:"http"`
-	Log      LogConfig      `mapstructure:"log"`
-	MongoDB  MongoConfig    `mapstructure:"mongodb"`
-	Redis    RedisConfig    `mapstructure:"redis"`
-	Leads    LeadsConfig    `mapstructure:"leads"`
-	Payments PaymentsConfig `mapstructure:"payments"`
-	PubSub   PubSubConfig   `mapstructure:"pubsub"`
+	HTTP         HTTPConfig         `mapstructure:"http"`
+	Log          LogConfig          `mapstructure:"log"`
+	MongoDB      MongoConfig        `mapstructure:"mongodb"`
+	Redis        RedisConfig        `mapstructure:"redis"`
+	Leads        LeadsConfig        `mapstructure:"leads"`
+	Payments     PaymentsConfig     `mapstructure:"payments"`
+	PubSub       PubSubConfig       `mapstructure:"pubsub"`
+	WhatsAppMeta WhatsAppMetaConfig `mapstructure:"whatsapp_meta"`
+}
+
+// WhatsAppMetaConfig holds Meta WhatsApp integration settings for phase 1.
+type WhatsAppMetaConfig struct {
+	// VerifyToken is the token sent by Meta during webhook verification.
+	// Loaded from VIL_WHATSAPP_META_VERIFY_TOKEN — never commit real values.
+	VerifyToken string `mapstructure:"verify_token"`
+	// AppSecret is the Meta App Secret used to validate X-Hub-Signature-256.
+	// Loaded from VIL_WHATSAPP_META_APP_SECRET — never commit real values.
+	AppSecret string `mapstructure:"app_secret"`
+	// InternalVerifyAuthToken is an optional defense-in-depth token for the intake route.
+	// IAM service-to-service auth is the primary control; this is secondary only.
+	// Loaded from VIL_WHATSAPP_META_INTERNAL_VERIFY_AUTH_TOKEN.
+	InternalVerifyAuthToken string `mapstructure:"internal_verify_auth_token"`
+	// BodyMaxBytes is the maximum accepted request body in bytes (default 3145728 = 3 MiB).
+	BodyMaxBytes int64 `mapstructure:"body_max_bytes"`
+	// InternalIntakeURL is the full URL of the internal intake route on meta-whatsapp-api.
+	// Required by the public relay. Derived from the deployed service URL in cloudbuild.
+	InternalIntakeURL string `mapstructure:"internal_intake_url"`
+	// InternalAudience is the base URL of the internal Cloud Run service used as the
+	// OIDC audience for service-to-service auth. Leave empty for local dev.
+	InternalAudience string `mapstructure:"internal_audience"`
 }
 
 // PaymentsConfig holds payments module settings.
@@ -62,6 +85,10 @@ type MongoConfig struct {
 	// CollectionVersionedPlans holds new versioned commercial plans (internal/plans).
 	// Kept separate from CollectionPlans to preserve the legacy checkout flow.
 	CollectionVersionedPlans string `mapstructure:"collection_versioned_plans"`
+	// CollectionWhatsAppMessageReceipts stores durable receipts for accepted WhatsApp messages.
+	CollectionWhatsAppMessageReceipts string `mapstructure:"collection_whatsapp_message_receipts"`
+	// CollectionWhatsAppMessageDedupe stores authoritative 7-day dedupe keys for WhatsApp messages.
+	CollectionWhatsAppMessageDedupe string `mapstructure:"collection_whatsapp_message_dedupe"`
 }
 
 // RedisConfig holds Redis connection settings.
@@ -142,6 +169,8 @@ func Load() (*Config, error) {
 	v.SetDefault("mongodb.collection_packages", "packages")
 	v.SetDefault("mongodb.collection_idempotency_keys", "idempotency_keys")
 	v.SetDefault("mongodb.collection_versioned_plans", "versioned_plans")
+	v.SetDefault("mongodb.collection_whatsapp_message_receipts", "whatsapp_message_receipts")
+	v.SetDefault("mongodb.collection_whatsapp_message_dedupe", "whatsapp_message_dedupe")
 	// redis
 	v.SetDefault("redis.addr", "localhost:6379")
 	v.SetDefault("redis.password", "")
@@ -175,6 +204,13 @@ func Load() (*Config, error) {
 	v.SetDefault("pubsub.project_id", "")
 	v.SetDefault("pubsub.payment_approved_topic", "")
 	v.SetDefault("pubsub.payment_approved_subscription", "")
+	// whatsapp_meta
+	v.SetDefault("whatsapp_meta.verify_token", "")
+	v.SetDefault("whatsapp_meta.app_secret", "")
+	v.SetDefault("whatsapp_meta.internal_verify_auth_token", "")
+	v.SetDefault("whatsapp_meta.body_max_bytes", int64(3145728)) // 3 MiB
+	v.SetDefault("whatsapp_meta.internal_intake_url", "")
+	v.SetDefault("whatsapp_meta.internal_audience", "")
 
 	// File lookup (optional)
 	v.SetConfigName("config")
