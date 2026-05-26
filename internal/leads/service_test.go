@@ -151,3 +151,33 @@ func TestService_Submit_ReceivedAtIsServerTime(t *testing.T) {
 		t.Errorf("ReceivedAt %v outside expected range [%v, %v]", saved.ReceivedAt, before, after)
 	}
 }
+
+func TestService_Submit_SubmittedAtPersistedSeparately(t *testing.T) {
+	repo := &fakeRepo{}
+	svc := newService(t, repo)
+
+	submitted := time.Date(2026, 5, 26, 10, 11, 12, 0, time.UTC)
+	req := leads.SubmitRequest{
+		Name:              "Joao Silva",
+		Email:             "joao@example.com",
+		Source:            "estaleiro-site",
+		ParsedSubmittedAt: &submitted,
+	}
+
+	if err := svc.Submit(context.Background(), req); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	saved := repo.saved[0]
+	if saved.SubmittedAt == nil {
+		t.Fatal("expected SubmittedAt to be persisted")
+	}
+	if !saved.SubmittedAt.Equal(submitted) {
+		t.Errorf("expected SubmittedAt=%v, got %v", submitted, *saved.SubmittedAt)
+	}
+	// ReceivedAt is server time and must differ from the client-supplied SubmittedAt.
+	if saved.ReceivedAt.Equal(submitted) {
+		t.Error("ReceivedAt must be independent of SubmittedAt")
+	}
+}
+

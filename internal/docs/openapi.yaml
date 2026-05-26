@@ -69,37 +69,69 @@ paths:
     post:
       summary: Submeter um lead
       description: |
-        Recebe um novo lead de qualquer canal (web, mobile, parceiro).
+        Recebe um novo lead do site ou de qualquer canal (web, mobile, parceiro).
+        Aceita o payload aninhado do site (preferido) ou o payload flat legado.
         Requer o token de autenticação no header `Authorization`.
+        O valor do header é comparado literalmente com o token configurado no backend
+        (VIL_LEADS_AUTH_TOKEN) sem nenhum processamento de prefixo.
       tags: [Leads]
       security:
-        - bearerAuth: []
+        - leadAuth: []
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CreateLeadRequest'
-            example:
-              name: "Maria Silva"
-              email: "maria@example.com"
-              phone: "+5511999990000"
-              source: "landing-page"
+              oneOf:
+                - $ref: '#/components/schemas/CreateLeadRequestSite'
+                - $ref: '#/components/schemas/CreateLeadRequestFlat'
+            examples:
+              site:
+                summary: Payload aninhado — site (preferido)
+                value:
+                  source: "estaleiro-site"
+                  submittedAt: "2026-05-26T10:11:12Z"
+                  lead:
+                    name: "Joao Silva"
+                    businessName: "Clinica X"
+                    whatsapp: "11999990000"
+                    email: "joao@example.com"
+                    profile: "medical"
+                    message: "Oi"
+                    consent: true
+              flat:
+                summary: Payload flat — legado (depreciado)
+                value:
+                  name: "Maria Silva"
+                  email: "maria@example.com"
+                  phone: "+5511999990000"
+                  source: "landing-page"
       responses:
-        '201':
-          description: Lead criado com sucesso
+        '200':
+          description: Lead recebido e persistido com sucesso
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/LeadResponse'
+                type: object
+                additionalProperties: false
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '409':
-          description: Lead duplicado (dedup window ativa)
+          description: Lead duplicado (email ou phone/whatsapp já existe)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '429':
           $ref: '#/components/responses/TooManyRequests'
+        '500':
+          description: Erro interno no servidor
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   # ── Organizations ────────────────────────────────────────────────────────────
 
@@ -641,6 +673,15 @@ paths:
 components:
 
   securitySchemes:
+    leadAuth:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: |
+        Token de autenticação da leads API (VIL_LEADS_AUTH_TOKEN).
+        O valor do header é comparado literalmente com o token configurado — sem
+        processamento de prefixo pelo backend. Inclua o prefixo no token apenas se ele
+        já estiver armazenado com o prefixo.
     bearerAuth:
       type: http
       scheme: bearer
@@ -835,9 +876,57 @@ components:
 
     # ── Leads ────────────────────────────────────────────────────────────────
 
-    CreateLeadRequest:
+    CreateLeadRequestSite:
       type: object
+      description: Payload aninhado preferido para envio de leads do site.
+      required: [source, submittedAt, lead]
+      additionalProperties: false
+      properties:
+        source:
+          type: string
+          maxLength: 80
+          example: "estaleiro-site"
+        submittedAt:
+          type: string
+          format: date-time
+          description: Timestamp de quando o formulário foi submetido (RFC3339).
+        lead:
+          type: object
+          required: [name, email, consent]
+          additionalProperties: false
+          properties:
+            name:
+              type: string
+              minLength: 2
+            businessName:
+              type: string
+              minLength: 2
+            whatsapp:
+              type: string
+              description: Normalizado para dígitos pelo backend; mínimo 8 dígitos.
+              example: "11999990000"
+            email:
+              type: string
+              format: email
+            profile:
+              type: string
+              enum: [administrative, medical, dental]
+            message:
+              type: string
+              maxLength: 500
+            consent:
+              type: boolean
+              description: Deve ser true para submissões via payload aninhado.
+              enum: [true]
+
+    CreateLeadRequestFlat:
+      type: object
+      deprecated: true
+      description: |
+        Payload flat legado. Ainda aceito para compatibilidade retroativa durante a transição.
+        Prefira o payload aninhado `CreateLeadRequestSite`.
       required: [name, email]
+      additionalProperties: false
       properties:
         name:
           type: string
@@ -848,23 +937,12 @@ components:
           format: email
         phone:
           type: string
-          description: Número no formato E.164 ou brasileiro (10/11 dígitos)
+          description: Normalizado para dígitos pelo backend; mínimo 8 dígitos se presente.
           example: "+5511999990000"
         source:
           type: string
           maxLength: 80
           example: "landing-page"
-
-    LeadResponse:
-      type: object
-      properties:
-        id:
-          type: string
-        email:
-          type: string
-        created_at:
-          type: string
-          format: date-time
 
     # ── Plans ────────────────────────────────────────────────────────────────
 

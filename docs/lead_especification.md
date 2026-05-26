@@ -1,17 +1,50 @@
-# API Spec — Lead Submission Endpoint
+﻿# Guia de Integração — Envio de Leads (Site Estaleiro → Backend)
 
-**Versão:** 1.0  
-**Produto:** Funcionario.online  
-**Responsável:** Backend  
-**Origem:** `lib/lead/submit.ts` + `lib/lead/schema.ts` + `app/actions/lead.ts`
+**Versão:** 3.0
+**Data:** 2026-05-26
+**Escopo:** Integração server-to-server entre o site Next.js (Estaleiro) e o endpoint `POST /api/leads` do backend edn-core.
 
 ---
 
-## Visão Geral
+## Propósito
 
-O frontend envia leads captados pelo formulário de contato via webhook HTTP. O backend deve expor um endpoint que receba, valide, persista e notifique de novos leads.
+Este guia descreve o contrato **atual e implementado** do endpoint de leads.
 
-O frontend já está instrumentado com um adaptador (`WebhookLeadAdapter`) que envia `POST` com `Content-Type: application/json` assim que o servidor Next.js valida o formulário com Zod. O backend não precisa validar novamente, mas **deve** validar como boa prática de defesa.
+O backend aceita dois shapes de payload:
+
+- **Payload aninhado do site** (preferido) — `source`, `submittedAt`, e `lead` (objeto).
+- **Payload flat legado** (depreciado, compatibilidade retroativa) — `name`, `email`, `phone`, `source` no topo.
+
+Os dois shapes são **mutuamente exclusivos**. Combinar campos do topo (`name`, `email`, `phone`) com o objeto `lead` resulta em `400 invalid_payload`.
+
+---
+
+## Variáveis de Ambiente (Lado do Site)
+
+Configure no `.env.local` para desenvolvimento e em secrets do ambiente de deploy para produção.
+**Nunca use o prefixo `NEXT_PUBLIC_`** — o token nunca deve ser exposto ao browser.
+
+### Desenvolvimento
+
+```env
+# .env.local
+LEADS_API_URL=https://dev.edn-core.app/api/leads
+LEADS_API_TOKEN=<token-de-dev>
+```
+
+> URL de referência para dev Cloud Run: `https://edn-site-dev-cuwktlrora-ew.a.run.app`
+
+### Produção
+
+```env
+# Secret do ambiente de deploy (ex: Cloud Run, Vercel)
+LEADS_API_URL=https://edn-core.app/api/leads
+LEADS_API_TOKEN=<token-de-producao>
+```
+
+> O backend lê o token via configuração com prefixo `VIL_` — isso é interno ao backend.
+> O site precisa apenas enviar o valor no header `Authorization`.
+> O valor é comparado **literalmente** — não adicione prefixo `Bearer` a não ser que o token armazenado já o inclua.
 
 ---
 
@@ -21,223 +54,191 @@ O frontend já está instrumentado com um adaptador (`WebhookLeadAdapter`) que e
 POST /api/leads
 ```
 
-### Autenticação
+- **Dev:** `https://dev.edn-core.app/api/leads`
+- **Produção:** `https://edn-core.app/api/leads`
 
-Bearer token via header customizável. O frontend envia:
+### Headers obrigatórios
 
-```http
-Authorization: <LEAD_WEBHOOK_AUTH_TOKEN>
-```
-
-O nome do header é configurável pela variável de ambiente `LEAD_WEBHOOK_AUTH_HEADER` no frontend (padrão sugerido: `Authorization`). O backend deve rejeitar requisições sem token válido com `401`.
-
-> As variáveis de ambiente do lado frontend são:
->
-> ```env
-> LEAD_WEBHOOK_URL=https://<backend>/api/leads
-> LEAD_WEBHOOK_AUTH_HEADER=Authorization
-> LEAD_WEBHOOK_AUTH_TOKEN=Bearer <token-secreto>
-> ```
+- `Content-Type: application/json`
+- `Authorization: <token>` — valor comparado por exact-match
 
 ---
 
-## Request
+## Shape preferido — Payload aninhado do site
 
-### Headers
+Body máximo: **16 KiB**. Campos desconhecidos são **rejeitados**.
 
-| Header        | Valor obrigatório                         |
-| ------------- | ----------------------------------------- |
-| Content-Type  | `application/json`                        |
-| Authorization | `Bearer <token>` (ou header configurado)  |
+### Campos do topo
 
-### Body
-
-```jsonc
-{
-  "source": "lumina-ia-site",          // string, fixo — identifica a origem
-  "submittedAt": "2026-04-11T14:30:00.000Z", // ISO 8601 UTC — timestamp gerado pelo frontend
-  "lead": {
-    "name": "João Silva",              // string, min 2 chars, obrigatório
-    "businessName": "Clínica Saúde+", // string, min 2 chars, obrigatório
-    "whatsapp": "11999990000",         // string, min 8 chars, obrigatório — somente dígitos após trim
-    "email": "joao@clinica.com",       // string | undefined — e-mail válido ou ausente
-    "profile": "medical",             // enum: "administrative" | "medical" | "dental"
-    "message": "Quero saber mais...",  // string | undefined — max 500 chars ou ausente
-    "consent": true                   // boolean, sempre true — usuário autorizou contato
-  }
-}
-```
+- `source` (string, obrigatório) — Trimado, máx 80 chars.
+- `submittedAt` (string, obrigatório) — Timestamp RFC3339, ex: `2026-05-26T10:11:12Z`.
+- `lead` (object, obrigatório) — Ver campos abaixo.
 
 ### Campos do objeto `lead`
 
-- `name`: `string`, obrigatório, mínimo 2 caracteres após trim.
-- `businessName`: `string`, obrigatório, mínimo 2 caracteres após trim.
-- `whatsapp`: `string`, obrigatório, mínimo 8 caracteres após trim.
-- `email`: `string`, opcional, e-mail válido; omitido se vazio.
-- `profile`: `string` (enum), obrigatório, `"administrative"`, `"medical"` ou `"dental"`.
-- `message`: `string`, opcional, máximo 500 caracteres; omitido se vazio.
-- `consent`: `boolean`, obrigatório, sempre `true`; o frontend bloqueia envio se `false`.
+- `name` (string, obrigatório) — Mínimo 2 chars após trim.
+- `email` (string, obrigatório) — E-mail válido.
+- `consent` (boolean, obrigatório) — Deve ser `true`.
+- `whatsapp` (string, opcional) — Normalizado para dígitos; mínimo 8 dígitos.
+- `businessName` (string, opcional) — Mínimo 2 chars se presente.
+- `profile` (string, opcional) — Um de: `administrative`, `medical`, `dental`.
+- `message` (string, opcional) — Máx 500 chars após trim.
 
-### Campos do envelope
-
-| Campo         | Tipo     | Obrigatório | Notas                                    |
-| ------------- | -------- | ----------- | ---------------------------------------- |
-| `source`      | `string` | Sim         | Valor fixo `"lumina-ia-site"`            |
-| `submittedAt` | `string` | Sim         | ISO 8601 UTC gerado no momento do envio  |
-
----
-
-## Response
-
-### 200 OK — Lead recebido e processado
-
-```json
-{}
-```
-
-Corpo vazio ou JSON mínimo. O frontend não consome o body de sucesso.
-
-### 400 Bad Request — Payload inválido
+### Exemplo de body (site)
 
 ```json
 {
-  "error": "invalid_payload",
-  "details": "Campo 'profile' deve ser um dos valores: administrative, medical, dental."
-}
-```
-
-### 401 Unauthorized — Token ausente ou inválido
-
-```json
-{
-  "error": "unauthorized"
-}
-```
-
-### 409 Conflict — Lead duplicado (opcional, recomendado)
-
-Retornar `409` se o mesmo `whatsapp` + `profile` já submeteu nos últimos 5 minutos, para evitar duplicatas por duplo clique ou retry do usuário. O frontend trata qualquer resposta não-2xx como erro silencioso — não impacta a UX.
-
-```json
-{
-  "error": "duplicate_lead"
-}
-```
-
-### 500 Internal Server Error — Falha interna
-
-```json
-{
-  "error": "internal_error"
-}
-```
-
----
-
-## Comportamento do Frontend
-
-- Envia **somente após validação Zod bem-sucedida** — o backend nunca receberá campos ausentes obrigatórios ou fora do enum.
-- `email` e `message` podem estar **ausentes** no objeto `lead` (não enviados como `null`, e sim omitidos).
-- `consent` é sempre `true` no payload — a validação do checkbox acontece no frontend e o formulário não envia se `false`.
-- Em caso de erro HTTP ou timeout, o usuário vê a mensagem: _"Ocorreu um erro ao enviar. Tente novamente ou use o WhatsApp."_ O frontend **não** faz retry automático.
-- `submittedAt` é o momento em que a Server Action Next.js despachou o webhook — pode ter até ~2 s de atraso em relação ao clique do usuário.
-
----
-
-## Fluxo Completo
-
-```text
-Usuário → Formulário (Next.js)
-  └─► Server Action: valida com Zod
-      └─► POST /api/leads  ──────────────────────────► Backend
-            Authorization: Bearer <token>                │
-            Content-Type: application/json               │
-                                                         ├─ Autenticar token
-                                                         ├─ Validar payload (defesa)
-                                                         ├─ Deduplicar (opcional)
-                                                         ├─ Persistir lead (DB/CRM)
-                                                         ├─ Notificar equipe (e-mail/Slack/WhatsApp)
-                                                         └─ Retornar 200
-```
-
----
-
-## Recomendações de Implementação
-
-### Persistência mínima
-
-Salvar ao menos:
-
-| Campo           | Tipo      | Notas                                           |
-| --------------- | --------- | ----------------------------------------------- |
-| `id`            | UUID      | Chave primária                                  |
-| `source`        | string    | `"lumina-ia-site"`                              |
-| `submitted_at`  | timestamp | Do payload (campo `submittedAt`)                |
-| `received_at`   | timestamp | Gerado pelo backend no momento do registro      |
-| `name`          | string    |                                                 |
-| `business_name` | string    |                                                 |
-| `whatsapp`      | string    |                                                 |
-| `email`         | string?   | Nullable                                        |
-| `profile`       | enum      | `administrative`, `medical`, `dental`           |
-| `message`       | string?   | Nullable                                        |
-| `consent`       | boolean   |                                                 |
-| `status`        | enum      | `new`, `contacted`, `qualified`, `lost`         |
-
-### Notificação
-
-Disparar ao menos uma das seguintes ao receber um nuevo lead:
-
-- E-mail para `comercial@funcionario.online`
-- Mensagem WhatsApp via API (mesmo stack usada no produto)
-- Webhook interno para CRM ou Slack
-
-### Segurança
-
-- Token deve ser armazenado como secret (não em código-fonte).
-- Endpoint deve aceitar somente HTTPS em produção.
-- Rate limit recomendado: 10 req/min por IP.
-- Log de tentativas com token inválido para monitoramento de abuso.
-
----
-
-## Variáveis de Ambiente (Lado Frontend)
-
-```env
-LEAD_WEBHOOK_URL=https://api.funcionario.online/api/leads
-LEAD_WEBHOOK_AUTH_HEADER=Authorization
-LEAD_WEBHOOK_AUTH_TOKEN=Bearer eyJ...
-```
-
-Configurar em `.env.local` (desenvolvimento) e em secrets do ambiente de deploy (produção).
-
----
-
-## Exemplo Completo de Requisição
-
-```http
-POST /api/leads HTTP/1.1
-Host: api.funcionario.online
-Content-Type: application/json
-Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-
-{
-  "source": "lumina-ia-site",
-  "submittedAt": "2026-04-11T17:45:12.334Z",
+  "source": "estaleiro-site",
+  "submittedAt": "2026-05-26T10:11:12Z",
   "lead": {
-    "name": "Carla Mendonça",
-    "businessName": "Odonto Sorrir",
-    "whatsapp": "11988887777",
-    "email": "carla@odontosorrir.com.br",
-    "profile": "dental",
-    "message": "Tenho 3 dentistas e preciso de suporte no agendamento.",
+    "name": "Joao Silva",
+    "businessName": "Clinica X",
+    "whatsapp": "11999990000",
+    "email": "joao@example.com",
+    "profile": "medical",
+    "message": "Oi",
     "consent": true
   }
 }
 ```
 
-```http
-HTTP/1.1 200 OK
-Content-Type: application/json
+---
 
-{}
+## Shape legado — Payload flat (depreciado)
+
+Aceito para compatibilidade retroativa durante a transição. Prefira o payload aninhado para novas integrações.
+
+- `name` (string, obrigatório) — Mínimo 2 chars.
+- `email` (string, obrigatório) — E-mail válido.
+- `phone` (string, opcional) — Normalizado para dígitos pelo backend; mínimo 8 dígitos se presente. Duplicata gera 409.
+- `source` (string, opcional) — Identifica a origem do lead. Trimado, máx 80 chars.
+
+### Exemplo de body (flat)
+
+```json
+{
+  "name": "Carla Mendonça",
+  "email": "carla@estaleiro.com.br",
+  "phone": "11988887777",
+  "source": "estaleiro-site"
+}
 ```
+
+---
+
+## Exemplo Next.js — Payload aninhado (Server Action)
+
+```typescript
+// app/actions/submit-lead.ts
+"use server";
+
+interface SiteLeadPayload {
+  name: string;
+  email: string;
+  whatsapp?: string;
+  businessName?: string;
+  profile?: "administrative" | "medical" | "dental";
+  message?: string;
+}
+
+export async function submitLead(data: SiteLeadPayload): Promise<void> {
+  const url = process.env.LEADS_API_URL;
+  const token = process.env.LEADS_API_TOKEN;
+
+  if (!url || !token) {
+    throw new Error("Variáveis LEADS_API_URL e LEADS_API_TOKEN não configuradas.");
+  }
+
+  const lead: Record<string, unknown> = {
+    name: data.name,
+    email: data.email,
+    consent: true,
+  };
+  if (data.whatsapp) lead.whatsapp = data.whatsapp;
+  if (data.businessName) lead.businessName = data.businessName;
+  if (data.profile) lead.profile = data.profile;
+  if (data.message) lead.message = data.message;
+
+  const body = {
+    source: "estaleiro-site",
+    submittedAt: new Date().toISOString(),
+    lead,
+  };
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: token,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (res.status === 409) {
+    // Lead duplicado — tratar silenciosamente ou logar
+    return;
+  }
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Erro ao enviar lead: ${res.status} ${text}`);
+  }
+}
+```
+
+---
+
+## Exemplo cURL
+
+```bash
+# Payload aninhado (preferido)
+curl -s -X POST https://dev.edn-core.app/api/leads \
+  -H "Content-Type: application/json" \
+  -H "Authorization: <token-de-dev>" \
+  -d '{
+    "source": "estaleiro-site",
+    "submittedAt": "2026-05-26T10:11:12Z",
+    "lead": {
+      "name": "João Silva",
+      "email": "joao@estaleiro.com.br",
+      "whatsapp": "11999990000",
+      "consent": true
+    }
+  }'
+
+# Resposta esperada em sucesso:
+# HTTP 200
+# {}
+```
+
+---
+
+## Respostas do Backend
+
+- `200` — Lead recebido e persistido com sucesso. Body: `{}`
+- `400 invalid_payload` — Campos obrigatórios ausentes, tipo inválido, campo desconhecido, payload misto, ou `consent` falso.
+- `401 unauthorized` — Token ausente ou não corresponde ao valor configurado.
+- `409 duplicate_lead` — `email` já existe, ou `whatsapp`/`phone` já existe quando enviado.
+- `429 rate_limited` — Rate limit excedido.
+- `500 internal_error` — Falha interna no backend.
+
+---
+
+## Deduplicação
+
+- `email` é sempre único — qualquer `email` repetido retorna `409`.
+- `whatsapp`/`phone` é opcionalmente deduplicado — se presente e já cadastrado, retorna `409`.
+- `submittedAt` é armazenado separadamente e **não** é usado para deduplicação.
+
+---
+
+## Checklist de Integração
+
+- [ ] `LEADS_API_URL` configurada no ambiente de deploy (sem `NEXT_PUBLIC_`).
+- [ ] `LEADS_API_TOKEN` configurada como secret no ambiente de deploy (sem `NEXT_PUBLIC_`).
+- [ ] Envio feito de Server Action ou Route Handler — nunca direto do browser.
+- [ ] Usar o payload aninhado (`lead` + `submittedAt`) para novas integrações.
+- [ ] `consent: true` incluído no objeto `lead`.
+- [ ] `Content-Type: application/json` presente em todas as requisições.
+- [ ] Status `409` tratado como sucesso silencioso (lead duplicado já existe).
+- [ ] Erros `4xx`/`5xx` logados no servidor, sem expor detalhes ao usuário final.
