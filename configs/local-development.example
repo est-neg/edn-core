@@ -1,0 +1,112 @@
+# Local development environment template.
+# Copy this file to .env.local and fill in the placeholders.
+# .env.local is gitignored — never commit it.
+#
+#   cp configs/local-development.example .env.local
+#
+# Secrets marked REPLACE_ME must be obtained from the project's Secret Manager
+# or from a teammate. Non-secret values can be used as-is for local dev.
+
+VIL_HTTP_ADDR=:8080
+VIL_HTTP_READ_TIMEOUT_SEC=10
+VIL_HTTP_WRITE_TIMEOUT_SEC=30
+VIL_HTTP_IDLE_TIMEOUT_SEC=120
+
+# Admin auth token — replace with a local random value for dev (never a production token)
+VIL_HTTP_ADMIN_AUTH_TOKEN=Bearer REPLACE_ME_ADMIN_AUTH_TOKEN
+
+VIL_LOG_LEVEL=debug
+VIL_LOG_JSON=true
+
+VIL_MONGODB_URI=mongodb+srv://USER:PASS@cluster0.XXXXX.mongodb.net/
+VIL_MONGODB_DATABASE=edn-core-db-dev
+VIL_MONGODB_CONNECT_TIMEOUT_SEC=10
+VIL_MONGODB_COLLECTION_LEADS=leads
+
+VIL_MONGODB_COLLECTION_ORDERS=orders
+VIL_MONGODB_COLLECTION_PAYMENTS=payments
+VIL_MONGODB_COLLECTION_SUBSCRIPTIONS=subscriptions
+VIL_MONGODB_COLLECTION_WEBHOOK_EVENTS=webhook_events
+VIL_MONGODB_COLLECTION_OUTBOX_EVENTS=outbox_events
+
+VIL_REDIS_PASSWORD=REPLACE_ME_REDIS_PASSWORD
+VIL_REDIS_ADDR=redis-14298.crce214.us-east-1-3.ec2.cloud.redislabs.com:14298
+VIL_REDIS_DB=0
+VIL_REDIS_DIAL_TIMEOUT_SEC=5
+VIL_REDIS_READ_TIMEOUT_SEC=3
+VIL_REDIS_WRITE_TIMEOUT_SEC=3
+VIL_REDIS_POOL_SIZE=10
+
+VIL_PAYMENTS_WEBHOOK_SECRET_PATH=local-test-secret
+VIL_PAYMENTS_INTERNAL_VERIFY_AUTH_TOKEN=local-internal-token
+VIL_PAYMENTS_INFINITEPAY_API_TOKEN=REPLACE_ME_INFINITEPAY_API_TOKEN
+# In deployed environments InfinitePay must reach the public relay, not localhost.
+# Pattern: https://<relay-host>/v1/webhooks/infinitepay/<secret-path>
+VIL_PAYMENTS_WEBHOOK_URL=https://<relay-host>/v1/webhooks/infinitepay/<secret-path>
+VIL_PAYMENTS_REDIRECT_URL=https://developer.funcionario.online/checkout/return
+VIL_PAYMENTS_REQUEST_BODY_MAX_BYTES=65536
+VIL_PAYMENTS_OUTBOX_DISPATCH_INTERVAL_SEC=30
+VIL_PAYMENTS_INFINITEPAY_BASE_URL=https://api.checkout.infinitepay.io
+VIL_PAYMENTS_INFINITEPAY_HANDLE=edn-villenneve
+
+# VIL_PUBSUB_PROJECT_ID disabled locally (no GCP credentials)
+VIL_PUBSUB_PROJECT_ID=
+VIL_PUBSUB_PAYMENT_APPROVED_TOPIC=payment-approved-dev
+VIL_PUBSUB_PAYMENT_APPROVED_SUBSCRIPTION=payment-approved-activation-sub-dev
+
+VIL_LEADS_AUTH_HEADER=Authorization
+VIL_LEADS_AUTH_TOKEN=Bearer REPLACE_ME_LEADS_AUTH_TOKEN
+VIL_LEADS_TENANT_ID=seed-ten-fun-onl-001
+VIL_LEADS_MAX_BODY_BYTES=16384
+VIL_LEADS_DEDUP_WINDOW_SEC=300
+VIL_LEADS_RATE_LIMIT_REQUESTS_PER_MINUTE=60
+VIL_LEADS_RATE_LIMIT_WINDOW_SEC=60
+VIL_LEADS_MAX_IN_FLIGHT=10
+VIL_LEADS_NOTIFICATION_TIMEOUT_SEC=10
+
+# CORS: allowed origins (web frontend + local dev)
+VIL_HTTP_CORS_ALLOWED_ORIGINS=http://localhost:3000,http://localhost:5173,http://localhost:8000,https://developer.funcionario.online
+
+# ── Relay service (cmd/webhook-relay) ───────────────────────────────────────
+# Run the relay separately from core:
+#   RELAY_SECRET_PATH=local-relay-secret go run ./cmd/webhook-relay
+#
+# Run the internal payments-api core surface on a different port:
+#   VIL_HTTP_ADDR=:8082 go run ./cmd/payments-api
+#
+# RELAY_SECRET_PATH: opaque path segment delivered in the webhook URL. Use a
+# random value of >= 128 bits entropy. Must NOT match VIL_PAYMENTS_WEBHOOK_SECRET_PATH.
+# RELAY_CORE_URL: points at cmd/payments-api running locally on :8082.
+RELAY_HTTP_ADDR=:8081
+RELAY_SECRET_PATH=local-relay-secret-change-me
+# RELAY_NEXT_SECRET_PATH=  (leave empty unless rotating; max overlap 15 min)
+RELAY_CORE_URL=http://localhost:8082/internal/payments/providers/infinitepay/webhook-reconcile
+# RELAY_CORE_AUDIENCE: Cloud Run service URL used as OIDC audience for GCP service-to-service auth.
+# Leave empty for local development (GCP metadata server is unavailable locally).
+# In production set to: https://<core-service-host>  (no trailing slash)
+RELAY_CORE_AUDIENCE=
+RELAY_CORE_INTERNAL_TOKEN=local-internal-token
+RELAY_BODY_MAX_BYTES=65536
+RELAY_FORWARD_TIMEOUT_SEC=3
+RELAY_SOURCE_MAX_IN_FLIGHT=8
+RELAY_SOURCE_RPM=120
+RELAY_GLOBAL_MAX_IN_FLIGHT=32
+
+# ── Meta WhatsApp services (cmd/meta-whatsapp-api and cmd/meta-whatsapp-webhook) ───────────
+# Run the internal intake API on a dedicated port first:
+#   VIL_HTTP_ADDR=:8083 go run ./cmd/meta-whatsapp-api
+#
+# Then run the public webhook relay on another port (it forwards to the API above):
+#   VIL_HTTP_ADDR=:8084 go run ./cmd/meta-whatsapp-webhook
+#
+# VIL_WHATSAPP_META_INTERNAL_INTAKE_URL must point at the cmd/meta-whatsapp-api instance.
+# VIL_WHATSAPP_META_INTERNAL_AUDIENCE is used only in deployed Cloud Run environments;
+# leave it empty for local dev (no GCP metadata server).
+VIL_WHATSAPP_META_VERIFY_TOKEN=local-whatsapp-verify-token-change-me
+VIL_WHATSAPP_META_APP_SECRET=REPLACE_ME_WHATSAPP_META_APP_SECRET
+VIL_WHATSAPP_META_INTERNAL_VERIFY_AUTH_TOKEN=local-whatsapp-internal-token
+VIL_WHATSAPP_META_INTERNAL_INTAKE_URL=http://localhost:8083/internal/whatsapp/meta/messages/intake
+VIL_WHATSAPP_META_INTERNAL_AUDIENCE=
+VIL_WHATSAPP_META_BODY_MAX_BYTES=3145728
+VIL_MONGODB_COLLECTION_WHATSAPP_MESSAGE_RECEIPTS=whatsapp_message_receipts
+VIL_MONGODB_COLLECTION_WHATSAPP_MESSAGE_DEDUPE=whatsapp_message_dedupe

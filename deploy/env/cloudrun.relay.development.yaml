@@ -1,0 +1,13 @@
+# Cloud Run env-vars for edn-webhook-dev (relay service).
+# Secrets (RELAY_SECRET_PATH, RELAY_CORE_INTERNAL_TOKEN) are
+# injected via --set-secrets in cloudbuild and must NOT appear here.
+# RELAY_CORE_URL and RELAY_CORE_AUDIENCE are derived from the deployed
+# edn-core-payments-dev service URL at the relay deploy step in cloudbuild,
+# merged into a generated temporary env-vars YAML file, and passed via
+# --env-vars-file; they are not set here.
+RELAY_HTTP_ADDR: ":8080"
+RELAY_BODY_MAX_BYTES: "65536"
+RELAY_FORWARD_TIMEOUT_SEC: "3"
+RELAY_SOURCE_MAX_IN_FLIGHT: "8"
+RELAY_SOURCE_RPM: "120"
+RELAY_GLOBAL_MAX_IN_FLIGHT: "32"

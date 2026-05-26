@@ -1,0 +1,343 @@
+steps:
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        gcloud artifacts repositories describe ${_ARTIFACT_REPOSITORY} --location=${_REGION} >/dev/null 2>&1 || \
+        gcloud artifacts repositories create ${_ARTIFACT_REPOSITORY} \
+          --repository-format=docker \
+          --location=${_REGION} \
+          --description="Docker images for edn-core"
+
+  - name: golang:1.25-alpine
+    id: preflight
+    entrypoint: sh
+    args:
+      - -ceu
+      - |
+        go test -short -count=1 -timeout 120s ./internal/payments/... ./internal/webhookrelay/... ./internal/platform/config/... ./internal/whatsapp/... ./internal/platform/mongodb/...
+        CGO_ENABLED=0 GOOS=linux go build -trimpath ./cmd/app ./cmd/subscription-worker ./cmd/payments-api ./cmd/webhook-relay ./cmd/meta-whatsapp-webhook ./cmd/meta-whatsapp-api
+
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - deploy/docker/Dockerfile
+      - --build-arg
+      - GO_BUILD_TARGET=./cmd/app
+      - -t
+      - ${_APP_IMAGE}
+      - .
+
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_APP_IMAGE}
+
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - deploy/docker/Dockerfile
+      - --build-arg
+      - GO_BUILD_TARGET=./cmd/subscription-worker
+      - -t
+      - ${_WORKER_IMAGE}
+      - .
+
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_WORKER_IMAGE}
+
+  # ── Relay image ──────────────────────────────────────────────────────────────
+  # _RELAY_IMAGE is defined in the substitutions block below.
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - deploy/docker/Dockerfile
+      - --build-arg
+      - GO_BUILD_TARGET=./cmd/webhook-relay
+      - -t
+      - ${_RELAY_IMAGE}
+      - .
+
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_RELAY_IMAGE}
+
+  # ── Payments-API (internal core) image ───────────────────────────────────────
+  # _PAYMENTS_API_IMAGE is defined in the substitutions block below.
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - deploy/docker/Dockerfile
+      - --build-arg
+      - GO_BUILD_TARGET=./cmd/payments-api
+      - -t
+      - ${_PAYMENTS_API_IMAGE}
+      - .
+
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_PAYMENTS_API_IMAGE}
+
+  # ── Meta WhatsApp API (internal intake) image ─────────────────────────────────
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - deploy/docker/Dockerfile
+      - --build-arg
+      - GO_BUILD_TARGET=./cmd/meta-whatsapp-api
+      - -t
+      - ${_WA_API_IMAGE}
+      - .
+
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_WA_API_IMAGE}
+
+  # ── Meta WhatsApp webhook (public relay) image ────────────────────────────────
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - deploy/docker/Dockerfile
+      - --build-arg
+      - GO_BUILD_TARGET=./cmd/meta-whatsapp-webhook
+      - -t
+      - ${_WA_WEBHOOK_IMAGE}
+      - .
+
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_WA_WEBHOOK_IMAGE}
+
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        gcloud run deploy edn-core-dev \
+          --image ${_APP_IMAGE} \
+          --region ${_REGION} \
+          --platform managed \
+          --no-invoker-iam-check \
+          --execution-environment gen2 \
+          --port 8080 \
+          --memory 512Mi \
+          --cpu 1 \
+          --concurrency 10 \
+          --min-instances 1 \
+          --max-instances 1 \
+          --timeout 300 \
+          --service-account ${_RUNTIME_SERVICE_ACCOUNT} \
+          --env-vars-file deploy/env/cloudrun.development.yaml \
+          --set-secrets VIL_MONGODB_URI=${_MONGODB_URI_SECRET}:latest,VIL_LEADS_AUTH_TOKEN=${_LEADS_AUTH_TOKEN_SECRET}:latest,VIL_REDIS_PASSWORD=${_REDIS_PASSWORD_SECRET}:latest,VIL_PAYMENTS_INFINITEPAY_API_TOKEN=${_PAYMENTS_INFINITEPAY_API_TOKEN_SECRET}:latest,VIL_PAYMENTS_WEBHOOK_URL=${_PAYMENTS_WEBHOOK_URL_SECRET}:latest
+
+  # ── Internal payments-API surface (authenticated only) ───────────────────────
+  # Hosts /internal/payments/providers/infinitepay/webhook-reconcile.
+  # MUST run with --no-allow-unauthenticated --ingress internal so it is never
+  # reachable from public internet traffic.
+  # _PAYMENTS_API_IMAGE is defined in the substitutions block below.
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        gcloud run deploy edn-core-payments-dev \
+          --image ${_PAYMENTS_API_IMAGE} \
+          --region ${_REGION} \
+          --platform managed \
+          --no-allow-unauthenticated \
+          --ingress internal \
+          --execution-environment gen2 \
+          --port 8080 \
+          --memory 512Mi \
+          --cpu 1 \
+          --concurrency 10 \
+          --min-instances 1 \
+          --max-instances 1 \
+          --timeout 300 \
+          --service-account ${_RUNTIME_SERVICE_ACCOUNT} \
+          --env-vars-file deploy/env/cloudrun.development.yaml \
+          --set-secrets VIL_MONGODB_URI=${_MONGODB_URI_SECRET}:latest,VIL_REDIS_PASSWORD=${_REDIS_PASSWORD_SECRET}:latest,VIL_PAYMENTS_INTERNAL_VERIFY_AUTH_TOKEN=${_PAYMENTS_INTERNAL_VERIFY_AUTH_TOKEN_SECRET}:latest,VIL_PAYMENTS_INFINITEPAY_API_TOKEN=${_PAYMENTS_INFINITEPAY_API_TOKEN_SECRET}:latest,VIL_PAYMENTS_WEBHOOK_URL=${_PAYMENTS_WEBHOOK_URL_SECRET}:latest
+
+  # ── Public relay (edn-webhook-dev) ───────────────────────────────────────────
+  # Thin stateless relay. Public ingress. No MongoDB. No Redis. No provider token.
+  # _RELAY_IMAGE and _RELAY_SERVICE_ACCOUNT are defined in the substitutions block.
+  # RELAY_CORE_URL and RELAY_CORE_AUDIENCE are derived from the deployed
+  # edn-core-payments-dev service URL at build time; no trigger substitution required.
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        CORE_AUDIENCE=$(gcloud run services describe edn-core-payments-dev \
+          --region ${_REGION} --format 'value(status.url)')
+        CORE_URL="$${CORE_AUDIENCE}/internal/payments/providers/infinitepay/webhook-reconcile"
+        cp deploy/env/cloudrun.relay.development.yaml /tmp/relay-env.yaml
+        printf 'RELAY_CORE_AUDIENCE: "%s"\nRELAY_CORE_URL: "%s"\n' \
+          "$${CORE_AUDIENCE}" "$${CORE_URL}" >> /tmp/relay-env.yaml
+        gcloud run deploy edn-webhook-dev \
+          --image ${_RELAY_IMAGE} \
+          --region ${_REGION} \
+          --platform managed \
+          --no-invoker-iam-check \
+          --execution-environment gen2 \
+          --port 8080 \
+          --memory 2Gi \
+          --cpu 2 \
+          --concurrency 10 \
+          --min-instances 0 \
+          --max-instances 2 \
+          --timeout 10 \
+          --service-account ${_RELAY_SERVICE_ACCOUNT} \
+          --env-vars-file /tmp/relay-env.yaml \
+          --set-secrets RELAY_SECRET_PATH=${_PAYMENTS_WEBHOOK_SECRET}:latest,RELAY_CORE_INTERNAL_TOKEN=${_PAYMENTS_INTERNAL_VERIFY_AUTH_TOKEN_SECRET}:latest
+
+  # ── Grant relay SA run.invoker on the internal payments surface ───────────────
+  # This binding must exist before relay-to-core traffic is enabled.
+  # _RELAY_SERVICE_ACCOUNT is defined in the substitutions block below.
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        gcloud run services add-iam-policy-binding edn-core-payments-dev \
+          --region ${_REGION} \
+          --member serviceAccount:${_RELAY_SERVICE_ACCOUNT} \
+          --role roles/run.invoker
+
+  # ── Meta WhatsApp API service (internal authenticated intake) ───────────────
+  # No public ingress. IAM service-to-service auth is the primary control.
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        gcloud run deploy edn-meta-whatsapp-api-dev \
+          --image ${_WA_API_IMAGE} \
+          --region ${_REGION} \
+          --platform managed \
+          --no-allow-unauthenticated \
+          --ingress internal \
+          --execution-environment gen2 \
+          --port 8080 \
+          --memory 512Mi \
+          --cpu 1 \
+          --concurrency 10 \
+          --min-instances 0 \
+          --max-instances 2 \
+          --timeout 60 \
+          --service-account ${_RUNTIME_SERVICE_ACCOUNT} \
+          --env-vars-file deploy/env/cloudrun.whatsapp-api.development.yaml \
+          --set-secrets VIL_MONGODB_URI=${_MONGODB_URI_SECRET}:latest,VIL_WHATSAPP_META_INTERNAL_VERIFY_AUTH_TOKEN=${_WA_INTERNAL_VERIFY_AUTH_TOKEN_SECRET}:latest
+
+  # ── Grant WhatsApp webhook SA run.invoker on the internal API surface ─────────
+  # IAM binding is applied before the public relay deploys so that the binding
+  # is in place before any traffic can reach the internal API service.
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        gcloud run services add-iam-policy-binding edn-meta-whatsapp-api-dev \
+          --region ${_REGION} \
+          --member serviceAccount:${_WA_WEBHOOK_SERVICE_ACCOUNT} \
+          --role roles/run.invoker
+
+  # ── Meta WhatsApp webhook (public) — derives intake URL from deployed API service ──
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        WA_API_AUDIENCE=$(gcloud run services describe edn-meta-whatsapp-api-dev \
+          --region ${_REGION} --format 'value(status.url)')
+        WA_API_INTAKE_URL="$${WA_API_AUDIENCE}/internal/whatsapp/meta/messages/intake"
+        cp deploy/env/cloudrun.whatsapp-webhook.development.yaml /tmp/wa-webhook-env.yaml
+        printf 'VIL_WHATSAPP_META_INTERNAL_AUDIENCE: "%s"\nVIL_WHATSAPP_META_INTERNAL_INTAKE_URL: "%s"\n' \
+          "$${WA_API_AUDIENCE}" "$${WA_API_INTAKE_URL}" >> /tmp/wa-webhook-env.yaml
+        gcloud run deploy edn-meta-whatsapp-webhook-dev \
+          --image ${_WA_WEBHOOK_IMAGE} \
+          --region ${_REGION} \
+          --platform managed \
+          --no-invoker-iam-check \
+          --execution-environment gen2 \
+          --port 8080 \
+          --memory 512Mi \
+          --cpu 1 \
+          --concurrency 10 \
+          --min-instances 0 \
+          --max-instances 2 \
+          --timeout 30 \
+          --service-account ${_WA_WEBHOOK_SERVICE_ACCOUNT} \
+          --env-vars-file /tmp/wa-webhook-env.yaml \
+          --set-secrets VIL_WHATSAPP_META_VERIFY_TOKEN=${_WA_VERIFY_TOKEN_SECRET}:latest,VIL_WHATSAPP_META_APP_SECRET=${_WA_APP_SECRET_SECRET}:latest,VIL_WHATSAPP_META_INTERNAL_VERIFY_AUTH_TOKEN=${_WA_INTERNAL_VERIFY_AUTH_TOKEN_SECRET}:latest
+
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        gcloud run deploy edn-core-dev-worker \
+          --image ${_WORKER_IMAGE} \
+          --region ${_REGION} \
+          --platform managed \
+          --no-allow-unauthenticated \
+          --ingress internal \
+          --execution-environment gen2 \
+          --port 8080 \
+          --memory 512Mi \
+          --cpu 1 \
+          --concurrency 1 \
+          --min-instances 1 \
+          --max-instances 1 \
+          --timeout 300 \
+          --service-account ${_WORKER_SERVICE_ACCOUNT} \
+          --env-vars-file deploy/env/cloudrun.development.yaml \
+          --set-secrets VIL_MONGODB_URI=${_MONGODB_URI_SECRET}:latest,VIL_REDIS_PASSWORD=${_REDIS_PASSWORD_SECRET}:latest
+
+images:
+  - ${_APP_IMAGE}
+  - ${_WORKER_IMAGE}
+  - ${_RELAY_IMAGE}
+  - ${_PAYMENTS_API_IMAGE}
+  - ${_WA_API_IMAGE}
+  - ${_WA_WEBHOOK_IMAGE}
+
+substitutions:
+  _REGION: us-central1
+  _ARTIFACT_REPOSITORY: edn-core
+  _APP_IMAGE: ${_REGION}-docker.pkg.dev/funcionario-online-493412/${_ARTIFACT_REPOSITORY}/edn-core-dev:${SHORT_SHA}
+  _WORKER_IMAGE: ${_REGION}-docker.pkg.dev/funcionario-online-493412/${_ARTIFACT_REPOSITORY}/edn-core-dev-worker:${SHORT_SHA}
+  _RELAY_IMAGE: ${_REGION}-docker.pkg.dev/funcionario-online-493412/${_ARTIFACT_REPOSITORY}/edn-webhook-dev:${SHORT_SHA}
+  _PAYMENTS_API_IMAGE: ${_REGION}-docker.pkg.dev/funcionario-online-493412/${_ARTIFACT_REPOSITORY}/edn-core-payments-dev:${SHORT_SHA}
+  _RELAY_SERVICE_ACCOUNT: edn-webhook-dev@funcionario-online-493412.iam.gserviceaccount.com
+  _RUNTIME_SERVICE_ACCOUNT: edn-core-dev@funcionario-online-493412.iam.gserviceaccount.com
+  _WORKER_SERVICE_ACCOUNT: edn-core-dev@funcionario-online-493412.iam.gserviceaccount.com
+  _MONGODB_URI_SECRET: edn-core-dev-mongodb-uri
+  _LEADS_AUTH_TOKEN_SECRET: edn-core-dev-leads-auth-token
+  _REDIS_PASSWORD_SECRET: edn-core-dev-redis-password
+  _PAYMENTS_WEBHOOK_SECRET: edn-core-dev-payments-webhook-secret-path
+  _PAYMENTS_INTERNAL_VERIFY_AUTH_TOKEN_SECRET: edn-core-dev-payments-internal-verify-auth-token
+  _PAYMENTS_INFINITEPAY_API_TOKEN_SECRET: edn-core-dev-payments-infinitepay-api-token
+  _PAYMENTS_WEBHOOK_URL_SECRET: edn-core-dev-payments-webhook-url
+  _WA_API_IMAGE: ${_REGION}-docker.pkg.dev/funcionario-online-493412/${_ARTIFACT_REPOSITORY}/edn-meta-whatsapp-api-dev:${SHORT_SHA}
+  _WA_WEBHOOK_IMAGE: ${_REGION}-docker.pkg.dev/funcionario-online-493412/${_ARTIFACT_REPOSITORY}/edn-meta-whatsapp-webhook-dev:${SHORT_SHA}
+  _WA_WEBHOOK_SERVICE_ACCOUNT: edn-whatsapp-webhook-dev@funcionario-online-493412.iam.gserviceaccount.com
+  _WA_VERIFY_TOKEN_SECRET: edn-core-dev-whatsapp-meta-verify-token
+  _WA_APP_SECRET_SECRET: edn-core-dev-whatsapp-meta-app-secret
+  _WA_INTERNAL_VERIFY_AUTH_TOKEN_SECRET: edn-core-dev-whatsapp-meta-internal-verify-auth-token
+
+options:
+  logging: CLOUD_LOGGING_ONLY

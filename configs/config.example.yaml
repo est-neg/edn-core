@@ -3,7 +3,98 @@ http:
   read_timeout_sec: 10
   write_timeout_sec: 30
   idle_timeout_sec: 120
+  # cors_allowed_origins: origens permitidas via CORS (separadas por vírgula).
+  # Dev:  https://developer.funcionario.online
+  # Prd:  https://funcionario.online
+  cors_allowed_origins: ""
 
 log:
   level: "info"
   json: true
+
+mongodb:
+  # URI loaded from VIL_MONGODB_URI env var — never commit real credentials here.
+  uri: ""
+  # Use edn-core-db-dev for development, edn-core-db-prd for production.
+  database: "edn-core-db-dev"
+  connect_timeout_sec: 10
+  collection_leads: "leads"
+  collection_plans: "plans"
+  collection_orders: "orders"
+  collection_payments: "payments"
+  collection_subscriptions: "subscriptions"
+  collection_webhook_events: "webhook_events"
+  collection_outbox_events: "outbox_events"
+  collection_whatsapp_message_receipts: "whatsapp_message_receipts"
+  collection_whatsapp_message_dedupe: "whatsapp_message_dedupe"
+
+redis:
+  # addr loaded from VIL_REDIS_ADDR — use Memorystore private IP in production.
+  addr: "localhost:6379"
+  # password loaded from VIL_REDIS_PASSWORD env var — never commit real values here.
+  password: ""
+  db: 0
+  dial_timeout_sec: 5
+  read_timeout_sec: 3
+  write_timeout_sec: 3
+  pool_size: 10
+
+payments:
+  # webhook_url loaded from VIL_PAYMENTS_WEBHOOK_URL env var.
+  # Must be the public relay endpoint in deployed environments:
+  #   https://<relay-host>/v1/webhooks/infinitepay/<secret-path>
+  # The <secret-path> segment is a secret; never commit a real value here.
+  webhook_url: ""
+  # redirect_url é a URL pública para onde a InfinitePay redireciona o cliente após o checkout.
+  # Dev: https://developer.funcionario.online/checkout/return
+  # Prd: https://funcionario.online/checkout/return
+  redirect_url: "https://developer.funcionario.online/checkout/return"
+  # webhook_secret_path loaded from VIL_PAYMENTS_WEBHOOK_SECRET_PATH — never commit here.
+  webhook_secret_path: ""
+  # internal_verify_auth_token loaded from VIL_PAYMENTS_INTERNAL_VERIFY_AUTH_TOKEN — never commit here.
+  internal_verify_auth_token: ""
+  request_body_max_bytes: 65536
+  outbox_dispatch_interval_sec: 30
+  infinitepay:
+    base_url: "https://api.checkout.infinitepay.io"
+    # api_token loaded from VIL_PAYMENTS_INFINITEPAY_API_TOKEN env var — never commit here.
+    api_token: ""
+    # handle is the InfinitePay link handle registered for this merchant account.
+    handle: ""
+
+pubsub:
+  # project_id is the GCP project ID for Pub/Sub.
+  project_id: ""
+  payment_approved_topic: "payment-approved"
+  payment_approved_subscription: "payment-approved-activation-sub"
+
+leads:
+  auth_header: "Authorization"
+  # Token loaded from VIL_LEADS_AUTH_TOKEN env var — never commit real values here.
+  auth_token: ""
+  max_body_bytes: 16384
+  dedup_window_sec: 300
+  rate_limit_requests_per_minute: 60
+  rate_limit_window_sec: 60
+  max_in_flight: 10
+  # Optional: webhook URL for lead notifications. Leave empty to disable.
+  notification_webhook_url: ""
+  notification_timeout_sec: 10
+
+whatsapp_meta:
+  # verify_token loaded from VIL_WHATSAPP_META_VERIFY_TOKEN — never commit real values here.
+  verify_token: ""
+  # app_secret loaded from VIL_WHATSAPP_META_APP_SECRET — never commit real values here.
+  app_secret: ""
+  # internal_verify_auth_token loaded from VIL_WHATSAPP_META_INTERNAL_VERIFY_AUTH_TOKEN.
+  # IAM service-to-service auth is the primary control; this is optional defense-in-depth.
+  internal_verify_auth_token: ""
+  # body_max_bytes: maximum accepted payload in bytes (default 3 MiB).
+  body_max_bytes: 3145728
+  # internal_intake_url: full URL of the intake route on meta-whatsapp-api.
+  # Derived at deploy time in cloudbuild. Example:
+  #   https://<meta-whatsapp-api-host>/internal/whatsapp/meta/messages/intake
+  internal_intake_url: ""
+  # internal_audience: Cloud Run service base URL used as OIDC audience.
+  # Leave empty for local development (no GCP metadata server available).
+  internal_audience: ""

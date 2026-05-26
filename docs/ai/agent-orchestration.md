@@ -14,7 +14,8 @@ This setup follows the current VS Code and GitHub Copilot customization model:
 | Agent | SAFe intent | Primary responsibility | Preferred model |
 | --- | --- | --- | --- |
 | `safe-backend-orchestrator` | Flow coordination | Route work, sequence handoffs, manage specialist usage | `GPT-5.4 xhigh` |
-| `solution-architect` | System/Solution Architect | Boundaries, contracts, NFRs, sequencing, risks | `GPT-5.4 xhigh` |
+| `social-media-growth-manager` | Growth and channel operations | Own Facebook, Instagram, WhatsApp, Meta Business workflows, organic growth, and social analytics | `GPT-5.4 xhigh` |
+| `solution-architect` | System/Solution Architect | Boundaries, contracts, NFRs, sequencing, risks, and methodology-guided architecture reviews using TOGAF, Zachman, Well-Architected, DDD, and C4 | `GPT-5.4 xhigh` |
 | `golang-developer` | Agile Team backend engineer | Implement Go services, workers, adapters, refactors | `Claude Sonnet 4.6` |
 | `database-engineer` | Data specialist / platform engineer | MariaDB, MongoDB, Redis design, migrations, caching | `Claude Sonnet 4.6` |
 | `security-reviewer` | Built-in security / compliance | Approve, reject, and suggest remediation for risks | `GPT-5.4 xhigh` |
@@ -23,6 +24,7 @@ This setup follows the current VS Code and GitHub Copilot customization model:
 ## Model Policy
 
 - Use `GPT-5.4 xhigh` for roles centered on reasoning, architecture, risk analysis, and creative problem solving.
+- Use `GPT-5.4 xhigh` for social channel strategy, Meta asset diagnosis, organic growth design, and cross-functional measurement planning.
 - Use `Claude Sonnet 4.6` as the default model for implementation-heavy work.
 - Use hidden Opus escalation agents when implementation remains blocked after meaningful attempts or when QA repeatedly sends the same correction back.
 - If a preferred label is unavailable in the local model picker, the agent falls back to the nearest compatible model declared in its frontmatter.
@@ -30,11 +32,12 @@ This setup follows the current VS Code and GitHub Copilot customization model:
 ## Handoff Flow
 
 1. `safe-backend-orchestrator` classifies the request and chooses the smallest specialist set.
-2. `solution-architect` defines boundaries, contracts, sequencing, and non-functional constraints.
-3. `golang-developer` and `database-engineer` implement the approved design.
-4. `security-reviewer` evaluates attack surface, auth, secrets, data exposure, and operational hardening.
-5. `qa-tdd` validates the change with tests, regression analysis, and release guidance.
-6. If implementation quality stalls, hand off to the relevant Opus escalation agent.
+2. `social-media-growth-manager` leads Facebook, Instagram, WhatsApp, Meta Business, content-system, organic-growth, and social-analytics requests.
+3. `solution-architect` defines boundaries, contracts, sequencing, and non-functional constraints when social or backend work needs product changes, APIs, or new event flows, applying TOGAF for transition planning, Zachman for completeness, Well-Architected for cloud tradeoffs, DDD for domain boundaries, and C4 for communication when relevant.
+4. `golang-developer` and `database-engineer` implement the approved Meta integration, analytics capture, and data design.
+5. `security-reviewer` evaluates permissions, auth, secrets, data exposure, privacy, and operational hardening.
+6. `qa-tdd` validates the change with tests, regression analysis, tracking checks, and release guidance.
+7. If implementation quality stalls, hand off to the relevant Opus escalation agent.
 
 ## Escalation Rules
 
@@ -45,7 +48,10 @@ This setup follows the current VS Code and GitHub Copilot customization model:
 ## Operating Principles
 
 - Architecture before broad coding.
+- Use recognized architecture lenses deliberately: TOGAF for governance and transition planning, Zachman for completeness, Well-Architected for cloud operations, DDD for domain modeling, and C4 for communication.
 - TDD and built-in quality over post-hoc inspection.
 - Security gates for externally reachable or privilege-changing behavior.
 - Explicit data ownership across MariaDB, MongoDB, and Redis.
+- Channel strategy stays aligned with product truth, consent posture, and measurable conversion paths.
+- Social-media agents can only consult the collaborators declared in their frontmatter; `social-media-growth-manager` is intentionally granted visibility into the current specialist set to unblock cross-domain questions.
 - Small, reversible increments with observable outcomes.

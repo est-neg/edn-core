@@ -5,9 +5,13 @@ bin/
 coverage.out
 coverage.html
 
-# Local config override (never commit secrets)
+# Local config overrides (never commit secrets)
 config.yaml
 config.local.yaml
+
+# Block all .env* files — local dev uses .env.local (copy from configs/local-development.example)
+.env
+.env.*
 
 # OS noise
 .DS_Store
@@ -16,3 +20,6 @@ Thumbs.db
 # IDE
 .idea/
 *.swp
+
+# Local Windows build artifacts
+*.exe

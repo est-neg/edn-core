@@ -1,0 +1,1125 @@
+openapi: 3.0.3
+info:
+  title: EDN Core API
+  version: 1.0.0
+  description: |
+    Backend core para produtos digitais EDN — leads, checkout, pagamentos e assinaturas.
+
+servers:
+  - url: http://localhost:8080
+    description: Desenvolvimento local
+  - url: https://dev.edn-core.app
+    description: Cloud Run (dev)
+  - url: https://edn-core.app
+    description: Cloud Run (produção)
+
+tags:
+  - name: Health
+    description: Probes de disponibilidade
+  - name: Leads
+    description: Captura e qualificação de leads
+  - name: Organizations
+    description: Gestão de organizações (entidade raiz administrativa)
+  - name: Tenants
+    description: Gestão de tenants (unidade operacional dentro de uma organização)
+  - name: Plans
+    description: Catálogo de planos disponíveis
+  - name: Checkout
+    description: Sessões de checkout e status de pedidos
+  - name: Orders
+    description: Consultas operacionais de pedidos (admin)
+
+paths:
+
+  # ── Health ──────────────────────────────────────────────────────────────────
+
+  /livez:
+    get:
+      summary: Liveness probe
+      description: Retorna 200 enquanto o processo está rodando.
+      tags: [Health]
+      responses:
+        '200':
+          description: Alive
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: ok
+
+  /readyz:
+    get:
+      summary: Readiness probe
+      description: Retorna 200 quando as dependências (MongoDB, etc.) estão prontas.
+      tags: [Health]
+      responses:
+        '200':
+          description: Ready
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: ok
+        '503':
+          description: Not ready yet
+
+  # ── Leads ───────────────────────────────────────────────────────────────────
+
+  /api/leads:
+    post:
+      summary: Submeter um lead
+      description: |
+        Recebe um novo lead de qualquer canal (web, mobile, parceiro).
+        Requer o token de autenticação no header `Authorization`.
+      tags: [Leads]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateLeadRequest'
+            example:
+              name: "Maria Silva"
+              email: "maria@example.com"
+              phone: "+5511999990000"
+              source: "landing-page"
+      responses:
+        '201':
+          description: Lead criado com sucesso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeadResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Lead duplicado (dedup window ativa)
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  # ── Organizations ────────────────────────────────────────────────────────────
+
+  /api/v1/organizations:
+    get:
+      summary: Listar organizações
+      tags: [Organizations]
+      security:
+        - adminAuth: []
+      responses:
+        '200':
+          description: Lista de organizações
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Organization'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      summary: Criar organização
+      tags: [Organizations]
+      security:
+        - adminAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOrganizationRequest'
+            example:
+              slug: edn-core
+              name: Estaleiro de Negocios
+              legal_name: ESTALEIRO DE NEGOCIOS LTDA
+              cnpj: "62.124.197/0001-28"
+              billing_email: gillylopes@gmail.com
+              phone: "(69) 9206-0958"
+              address:
+                street: R ANTONIO SAAD
+                number: "2500"
+                complement: COND TERRA NOVA CASA 395
+                district: BOA VISTA
+                city: PONTA GROSSA
+                state: PR
+                postal_code: "84073-170"
+                country: BR
+      responses:
+        '201':
+          description: Organização criada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Organization'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Slug ou UUID duplicado
+
+  /api/v1/organizations/{orgUUID}:
+    parameters:
+      - name: orgUUID
+        in: path
+        required: true
+        schema:
+          type: string
+        description: UUID da organização
+    get:
+      summary: Obter organização
+      tags: [Organizations]
+      security:
+        - adminAuth: []
+      responses:
+        '200':
+          description: Organização encontrada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Organization'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Não encontrada
+    put:
+      summary: Atualizar organização
+      tags: [Organizations]
+      security:
+        - adminAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateOrganizationRequest'
+      responses:
+        '200':
+          description: Atualizada com sucesso
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Não encontrada
+    delete:
+      summary: Desativar organização
+      description: Define `active=false`. Não remove o documento.
+      tags: [Organizations]
+      security:
+        - adminAuth: []
+      responses:
+        '204':
+          description: Desativada
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Não encontrada
+
+  # ── Tenants ──────────────────────────────────────────────────────────────────
+
+  /api/v1/organizations/{orgUUID}/tenants:
+    parameters:
+      - name: orgUUID
+        in: path
+        required: true
+        schema:
+          type: string
+        description: UUID da organização
+    get:
+      summary: Listar tenants da organização
+      tags: [Tenants]
+      security:
+        - adminAuth: []
+      responses:
+        '200':
+          description: Lista de tenants
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Tenant'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      summary: Criar tenant
+      tags: [Tenants]
+      security:
+        - adminAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTenantRequest'
+            example:
+              slug: fun-onl
+              name: Funcionario Online
+              channels: [web, mobile]
+      responses:
+        '201':
+          description: Tenant criado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tenant'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Slug duplicado na organização
+
+  /api/v1/organizations/{orgUUID}/tenants/{tenantUUID}:
+    parameters:
+      - name: orgUUID
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: tenantUUID
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Obter tenant
+      tags: [Tenants]
+      security:
+        - adminAuth: []
+      responses:
+        '200':
+          description: Tenant encontrado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tenant'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Não encontrado
+    put:
+      summary: Atualizar tenant
+      tags: [Tenants]
+      security:
+        - adminAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTenantRequest'
+      responses:
+        '200':
+          description: Atualizado com sucesso
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Não encontrado
+    delete:
+      summary: Desativar tenant
+      description: Define `active=false`. Não remove o documento.
+      tags: [Tenants]
+      security:
+        - adminAuth: []
+      responses:
+        '204':
+          description: Desativado
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Não encontrado
+
+  # ── Plans ───────────────────────────────────────────────────────────────────
+
+  /v1/plans:
+    get:
+      summary: Listar planos ativos
+      description: |
+        Retorna os planos disponíveis para checkout do tenant.
+        `organization_slug` e `tenant_slug` são obrigatórios. O backend resolve o tenant
+        em runtime e consulta a coleção `versioned_plans`.
+      tags: [Plans]
+      parameters:
+        - name: organization_slug
+          in: query
+          required: true
+          description: Slug público da organização.
+          schema:
+            type: string
+        - name: tenant_slug
+          in: query
+          required: true
+          description: Slug público do tenant.
+          schema:
+            type: string
+        - name: channel
+          in: query
+          required: false
+          description: Canal comercial filtrado. Apenas `web` e `mobile` são aceitos neste endpoint público. Canais internos (`partner`, `all`) não são aceitos e retornam erro.
+          schema:
+            type: string
+            enum: [web, mobile]
+      responses:
+        '200':
+          description: Lista de planos
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  plans:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Plan'
+              example:
+                plans:
+                  - id: "550e8400-e29b-41d4-a716-446655440001"
+                    slug: "pro"
+                    name: "Plano Pro Mensal"
+                    billing_cycle: "monthly"
+                    price_cents: 9900
+                    currency: "BRL"
+                    active: true
+                    max_installments: 1
+                  - id: "550e8400-e29b-41d4-a716-446655440002"
+                    slug: "pro"
+                    name: "Plano Pro Anual"
+                    billing_cycle: "annual"
+                    price_cents: 99000
+                    currency: "BRL"
+                    active: true
+                    max_installments: 12
+        '404':
+          description: Organização ou tenant não encontrados
+        '422':
+          description: Escopo inválido
+
+  # ── Checkout ────────────────────────────────────────────────────────────────
+
+  /v1/checkout/sessions:
+    post:
+      summary: Criar ou retomar sessão de checkout
+      description: |
+        Cria um pedido e retorna a URL de checkout hospedada pela InfinitePay **(HTTP 201)**.
+        Se `checkout_intent_key` for enviado no body (handle emitido por um 201 anterior),
+        o backend tenta retomar o checkout existente e retorna **(HTTP 200)** sem criar novo pedido.
+
+        **Semântica create-or-resume:**
+        - Sem `checkout_intent_key`: cria novo pedido → 201.
+        - Com `checkout_intent_key` válido e ativo: retoma → 200.
+        - Com `checkout_intent_key` expirado ou em estado terminal: 409 com `error_code` específico.
+
+        O preço é sempre resolvido pelo backend a partir do plano — nunca aceito do cliente.
+        O header `Idempotency-Key` é obrigatório para o caminho de criacao e para retries do mesmo checkout.
+        Para retomada via `checkout_intent_key`, o header `Idempotency-Key` pode ser omitido.
+        `organization_slug` e `tenant_slug` sao obrigatorios; o backend resolve o tenant
+        em runtime e seleciona o plano publicado em `versioned_plans`.
+      tags: [Checkout]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: >-
+            Obrigatorio para criacao e retry seguro (caminho sem checkout_intent_key).
+            Opcional quando checkout_intent_key e fornecido (retomada).
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCheckoutRequest'
+            example:
+              organization_slug: "acme"
+              tenant_slug: "public"
+              channel: "web"
+              plan_slug: "pro"
+              billing_cycle: "monthly"
+              checkout_intent_key: "abc123XYZ_opaque_handle"
+              customer:
+                name: "João Costa"
+                email: "joao@example.com"
+                document: "12345678900"
+                phone: "+5511988880000"
+      responses:
+        '201':
+          description: Sessão criada — redirecionar para checkout_url
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateCheckoutResponse'
+        '200':
+          description: Checkout retomado — redirecionar para checkout_url
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateCheckoutResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          description: Organização, tenant ou plano não encontrados
+        '409':
+          description: |
+            Conflito de estado — `error_code` diferencia o caso:
+            - `checkout_idempotency_conflict`: Idempotency-Key já foi usada com payload diferente.
+            - `checkout_in_progress`: outro request está processando o mesmo checkout agora (lock de fingerprint ativo).
+            - `checkout_already_open`: já existe um checkout ativo para o mesmo CPF/plano; use o `checkout_intent_key` original para retomar.
+            - `checkout_non_resumable`: checkout_intent_key existe mas não pode ser retomado.
+            - `checkout_expired`: checkout_intent_key expirado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckoutErrorResponse'
+        '422':
+          description: Requisição inválida
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '502':
+          description: InfinitePay indisponível — o checkout não pôde ser criado junto ao provider
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: |
+            Estado do provider ambíguo ou recovery necessário.
+            Quando o checkout backend já existe, a resposta também pode incluir
+            `order_nsu` e `checkout_intent_key` para o cliente continuar via `/v1/checkout/sessions/track`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckoutErrorResponse'
+
+  /v1/checkout/sessions/track:
+    post:
+      summary: Rastrear progresso de checkout
+      description: |
+        Endpoint público para acompanhamento de progresso de um checkout.
+        O `checkout_intent_key` é o token de capacidade — enviado no body para
+        não aparecer em URL, path, query ou logs.
+        Retorna progresso coarse (status, resumível, url de checkout quando aberto).
+        Nunca retorna PII do cliente.
+      tags: [Checkout]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TrackCheckoutRequest'
+            example:
+              checkout_intent_key: "abc123XYZ_opaque_handle"
+      responses:
+        '200':
+          description: Progresso do checkout
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrackCheckoutResponse'
+        '400':
+          description: Body inválido (JSON malformado)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Token desconhecido
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: checkout_intent_key ausente ou vazio
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          description: Erro interno
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Estado do provider ambíguo
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckoutErrorResponse'
+
+  # ── Orders (admin) ──────────────────────────────────────────────────────────
+
+  /api/v1/orders/search:
+    post:
+      summary: Buscar pedidos por CPF (admin)
+      description: |
+        Endpoint operacional para busca de pedidos por CPF.
+        Requer o token de admin no header `Authorization`.
+        O CPF é enviado no body e normalizado server-side.
+        Nunca aparece em URL, query ou logs.
+      tags: [Orders]
+      security:
+        - adminAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminOrderSearchRequest'
+            example:
+              document: "529.982.247-25"
+      responses:
+        '200':
+          description: Lista de pedidos para o CPF informado (pode ser vazia)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminOrderSearchResponse'
+        '400':
+          description: Body inválido (JSON malformado)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          description: CPF inválido — armazenamento não é consultado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          description: Erro interno ao consultar o armazenamento
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/orders/{orderNSU}/status:
+    get:
+      summary: Consultar status de pedido
+      description: |
+        Retorna o status atual do pedido e, se pago, os dados da assinatura ativada.
+      tags: [Checkout]
+      parameters:
+        - name: orderNSU
+          in: path
+          required: true
+          description: NSU único gerado no momento do checkout
+          schema:
+            type: string
+            pattern: '^[a-zA-Z0-9\-_]{1,64}$'
+            example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+      responses:
+        '200':
+          description: Status do pedido
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderStatusResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          description: Pedido não encontrado
+
+# ── Components ─────────────────────────────────────────────────────────────────
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Token de autenticação da leads API (VIL_LEADS_AUTH_TOKEN)
+    adminAuth:
+      type: http
+      scheme: bearer
+      description: Token de administração para organizations/tenants (VIL_HTTP_ADMIN_AUTH_TOKEN)
+
+  responses:
+    BadRequest:
+      description: Requisição inválida
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Token ausente ou inválido
+    TooManyRequests:
+      description: Rate limit excedido
+      headers:
+        Retry-After:
+          description: Segundos até que o rate limit seja resetado
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+
+    # ── Organizations ────────────────────────────────────────────────────────
+
+    Address:
+      type: object
+      properties:
+        street:
+          type: string
+        number:
+          type: string
+        complement:
+          type: string
+        district:
+          type: string
+        city:
+          type: string
+        state:
+          type: string
+          minLength: 2
+          maxLength: 2
+          example: PR
+        postal_code:
+          type: string
+          example: "84073-170"
+        country:
+          type: string
+          example: BR
+
+    Organization:
+      type: object
+      properties:
+        org_uuid:
+          type: string
+        slug:
+          type: string
+        name:
+          type: string
+        legal_name:
+          type: string
+        cnpj:
+          type: string
+          example: "62.124.197/0001-28"
+        billing_email:
+          type: string
+          format: email
+        phone:
+          type: string
+        address:
+          $ref: '#/components/schemas/Address'
+        active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateOrganizationRequest:
+      type: object
+      required: [slug, name, billing_email]
+      properties:
+        slug:
+          type: string
+          minLength: 2
+          maxLength: 64
+        name:
+          type: string
+          minLength: 2
+          maxLength: 200
+        legal_name:
+          type: string
+        cnpj:
+          type: string
+        billing_email:
+          type: string
+          format: email
+        phone:
+          type: string
+        address:
+          $ref: '#/components/schemas/Address'
+
+    UpdateOrganizationRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        legal_name:
+          type: string
+        cnpj:
+          type: string
+        billing_email:
+          type: string
+          format: email
+        phone:
+          type: string
+        address:
+          $ref: '#/components/schemas/Address'
+        active:
+          type: boolean
+
+    # ── Tenants ──────────────────────────────────────────────────────────────
+
+    Tenant:
+      type: object
+      properties:
+        tenant_uuid:
+          type: string
+        organization_id:
+          type: string
+          description: Referência ao org_uuid da organização pai
+        slug:
+          type: string
+        name:
+          type: string
+        channels:
+          type: array
+          items:
+            type: string
+            enum: [web, mobile, partner]
+        active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateTenantRequest:
+      type: object
+      required: [slug, name]
+      properties:
+        slug:
+          type: string
+          minLength: 2
+          maxLength: 64
+        name:
+          type: string
+          minLength: 2
+          maxLength: 200
+        channels:
+          type: array
+          items:
+            type: string
+            enum: [web, mobile, partner]
+          default: [web]
+
+    UpdateTenantRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        channels:
+          type: array
+          items:
+            type: string
+            enum: [web, mobile, partner]
+        active:
+          type: boolean
+
+    # ── Leads ────────────────────────────────────────────────────────────────
+
+    CreateLeadRequest:
+      type: object
+      required: [name, email]
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 120
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+          description: Número no formato E.164 ou brasileiro (10/11 dígitos)
+          example: "+5511999990000"
+        source:
+          type: string
+          maxLength: 80
+          example: "landing-page"
+
+    LeadResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    # ── Plans ────────────────────────────────────────────────────────────────
+
+    Plan:
+      type: object
+      properties:
+        id:
+          type: string
+          description: UUID público do plano (plan_uuid da coleção versioned_plans).
+        slug:
+          type: string
+        name:
+          type: string
+        billing_cycle:
+          type: string
+          enum: [monthly, annual, one_time]
+        price_cents:
+          type: integer
+          description: Preço em centavos (BRL)
+        currency:
+          type: string
+          example: BRL
+        active:
+          type: boolean
+        max_installments:
+          type: integer
+          description: Número máximo de parcelas aceitas no checkout deste plano.
+
+    # ── Checkout ─────────────────────────────────────────────────────────────
+
+    CreateCheckoutRequest:
+      type: object
+      description: |
+        Corpo do request para criar ou retomar um checkout.
+
+        **Caminho de criação** (sem `checkout_intent_key`): `organization_slug`, `tenant_slug`,
+        `plan_slug`, `billing_cycle` e `customer` são obrigatórios. O header `Idempotency-Key`
+        também é obrigatório neste caminho.
+
+        **Caminho de retomada** (com `checkout_intent_key`): apenas `checkout_intent_key` é
+        necessário no body. Os demais campos são ignorados. O header `Idempotency-Key` é
+        opcional neste caminho.
+
+        O OpenAPI 3.0 não suporta requisitos condicionais; os campos obrigatórios de cada
+        caminho estão documentados acima.
+      properties:
+        organization_slug:
+          type: string
+          description: Slug público da organização.
+        tenant_slug:
+          type: string
+          description: Slug público do tenant.
+        channel:
+          type: string
+          enum: [web, mobile]
+          description: Canal comercial do checkout. Apenas `web` e `mobile` são aceitos. Quando omitido, o backend assume `web`. Canais internos (`partner`, `all`) não são aceitos neste endpoint público.
+        plan_slug:
+          type: string
+        billing_cycle:
+          type: string
+          enum: [monthly, annual]
+        checkout_intent_key:
+          type: string
+          description: |
+            Handle opaco emitido pelo backend no `checkout_intent_key` de uma resposta 201 anterior.
+            Quando presente, ativa semântica create-or-resume: o backend retoma o checkout existente
+            em vez de criar um novo e retorna 200. Omitir para criar um novo checkout.
+        customer:
+          $ref: '#/components/schemas/Customer'
+
+    Customer:
+      type: object
+      required: [name, email, phone, document]
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+          description: Telefone em E.164 (+5511...) ou 10/11 dígitos brasileiros
+          example: "+5511987654321"
+        document:
+          type: string
+          description: CPF — 11 dígitos com ou sem pontuação (000.000.000-00 ou 00000000000)
+          example: "529.982.247-25"
+
+    CreateCheckoutResponse:
+      type: object
+      properties:
+        order_nsu:
+          type: string
+          description: Identificador único do pedido para consulta de status
+        checkout_intent_key:
+          type: string
+          description: |
+            Handle opaco emitido pelo backend. Persista este valor no cliente para acionar
+            semântica create-or-resume em retentativas futuras ou após refresh de página.
+        status:
+          type: string
+          enum: [created, checkout_created, pending, paid, failed, expired, pending_review]
+        checkout_url:
+          type: string
+          format: uri
+          description: URL de checkout da InfinitePay para redirecionar o cliente
+        expires_at:
+          type: string
+          format: date-time
+
+    CheckoutErrorResponse:
+      type: object
+      description: Resposta de erro estruturada para 409 e 503.
+      properties:
+        error:
+          type: string
+        error_code:
+          type: string
+          enum:
+            - checkout_idempotency_conflict
+            - checkout_in_progress
+            - checkout_already_open
+            - checkout_non_resumable
+            - checkout_expired
+            - checkout_recovery_required
+            - provider_state_ambiguous
+        order_nsu:
+          type: string
+          description: Identificador do pedido já criado, quando o backend consegue correlacionar a falha com um checkout existente.
+        checkout_intent_key:
+          type: string
+          description: Handle opaco já emitido para o checkout existente; persista este valor para usar `/v1/checkout/sessions/track` após um 503.
+
+    OrderStatusResponse:
+      type: object
+      properties:
+        order_nsu:
+          type: string
+        status:
+          type: string
+          enum: [created, checkout_created, pending, paid, failed, expired, pending_review]
+        subscription_status:
+          type: string
+          enum: [pending_activation, active, suspended, canceled, expired]
+        receipt_url:
+          type: string
+          format: uri
+        plan_slug:
+          type: string
+
+    SubscriptionSummary:
+      type: object
+      nullable: true
+      properties:
+        status:
+          type: string
+          enum: [active, cancelled, expired]
+        plan_slug:
+          type: string
+        billing_cycle:
+          type: string
+          enum: [monthly, annual]
+        ends_at:
+          type: string
+          format: date-time
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+
+    # ── Tracking & Admin Orders ────────────────────────────────────────────────
+
+    TrackCheckoutRequest:
+      type: object
+      required: [checkout_intent_key]
+      properties:
+        checkout_intent_key:
+          type: string
+          description: Handle opaco emitido pelo backend no momento da criação do checkout.
+          minLength: 1
+
+    TrackCheckoutResponse:
+      type: object
+      description: Progresso coarse do checkout. Sem PII do cliente.
+      properties:
+        order_nsu:
+          type: string
+        checkout_intent_key:
+          type: string
+        status:
+          type: string
+          enum: [created, checkout_created, pending, paid, failed, expired, pending_review]
+        plan_slug:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        resumable:
+          type: boolean
+          description: Verdadeiro quando o checkout ainda pode ser retomado.
+        checkout_url:
+          type: string
+          format: uri
+          description: Presente apenas quando resumable=true e a URL do provider está disponível.
+        receipt_url:
+          type: string
+          format: uri
+          description: Presente apenas quando o pedido está pago.
+
+    AdminOrderSearchRequest:
+      type: object
+      required: [document]
+      properties:
+        document:
+          type: string
+          description: CPF com ou sem pontuação. Normalizado server-side.
+          example: "529.982.247-25"
+
+    AdminOrderSummary:
+      type: object
+      properties:
+        order_nsu:
+          type: string
+        status:
+          type: string
+          enum: [created, checkout_created, pending, paid, failed, expired, pending_review]
+        plan_slug:
+          type: string
+        billing_cycle:
+          type: string
+          enum: [monthly, annual, one_time]
+        amount_cents:
+          type: integer
+        currency:
+          type: string
+          example: BRL
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+
+    AdminOrderSearchResponse:
+      type: object
+      properties:
+        orders:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminOrderSummary'

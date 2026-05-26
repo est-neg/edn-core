@@ -1,0 +1,13 @@
+# Cloud Run env-vars for edn-meta-whatsapp-api-prd (internal authenticated intake).
+# Secrets (VIL_MONGODB_URI, VIL_WHATSAPP_META_INTERNAL_VERIFY_AUTH_TOKEN) are injected via --set-secrets in cloudbuild and must NOT appear here.
+VIL_HTTP_ADDR: ":8080"
+VIL_HTTP_READ_TIMEOUT_SEC: "10"
+VIL_HTTP_WRITE_TIMEOUT_SEC: "30"
+VIL_HTTP_IDLE_TIMEOUT_SEC: "120"
+VIL_LOG_LEVEL: "info"
+VIL_LOG_JSON: "true"
+VIL_MONGODB_DATABASE: "edn-core-db-prd"
+VIL_MONGODB_CONNECT_TIMEOUT_SEC: "10"
+VIL_MONGODB_COLLECTION_WHATSAPP_MESSAGE_RECEIPTS: "whatsapp_message_receipts"
+VIL_MONGODB_COLLECTION_WHATSAPP_MESSAGE_DEDUPE: "whatsapp_message_dedupe"
+VIL_WHATSAPP_META_BODY_MAX_BYTES: "3145728"
