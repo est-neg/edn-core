@@ -36,6 +36,21 @@ func (r *mongoRepository) Save(ctx context.Context, lead Lead) error {
 	if lead.Phone != "" {
 		doc = append(doc, bson.E{Key: "phone", Value: lead.Phone})
 	}
+	if lead.SubmittedAt != nil {
+		doc = append(doc, bson.E{Key: "submitted_at", Value: *lead.SubmittedAt})
+	}
+	if lead.BusinessName != "" {
+		doc = append(doc, bson.E{Key: "business_name", Value: lead.BusinessName})
+	}
+	if lead.Profile != "" {
+		doc = append(doc, bson.E{Key: "profile", Value: lead.Profile})
+	}
+	if lead.Message != "" {
+		doc = append(doc, bson.E{Key: "message", Value: lead.Message})
+	}
+	if lead.Consent {
+		doc = append(doc, bson.E{Key: "consent", Value: lead.Consent})
+	}
 	if lead.NotificationError != "" {
 		doc = append(doc, bson.E{Key: "notification_error", Value: lead.NotificationError})
 	}

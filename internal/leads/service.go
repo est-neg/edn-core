@@ -67,9 +67,14 @@ func (s *Service) Submit(ctx context.Context, req SubmitRequest) error {
 		TenantID:           s.cfg.TenantID,
 		Source:             req.Source,
 		ReceivedAt:         receivedAt,
+		SubmittedAt:        req.ParsedSubmittedAt,
 		Name:               req.Name,
 		Email:              req.Email,
 		Phone:              req.Phone,
+		BusinessName:       req.BusinessName,
+		Profile:            req.Profile,
+		Message:            req.Message,
+		Consent:            req.Consent,
 		Status:             "new",
 		NotificationStatus: s.initialNotificationStatus(),
 	}
@@ -84,7 +89,7 @@ func (s *Service) Submit(ctx context.Context, req SubmitRequest) error {
 	s.log.Info("lead submitted",
 		zap.String("lead_id", lead.ID),
 		zap.String("source", lead.Source),
-		zap.String("email", lead.Email),
+		zap.String("profile", lead.Profile),
 	)
 
 	if !s.enabled {
