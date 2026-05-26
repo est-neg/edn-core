@@ -25,7 +25,7 @@ Region: dev → `us-central1`, prd → `southamerica-east1`.
 | `edn-core-prd-mongodb-uri` | `VIL_MONGODB_URI` | API service only |
 | `edn-core-prd-whatsapp-meta-verify-token` | `VIL_WHATSAPP_META_VERIFY_TOKEN` | webhook service only |
 | `edn-core-prd-whatsapp-meta-app-secret` | `VIL_WHATSAPP_META_APP_SECRET` | webhook service only |
-| `edn-core-prd-whatsapp-meta-internal-verify-auth-token` | `VIL_WHATSAPP_META_INTERNAL_VERIFY_AUTH_TOKEN` | both services |
+| `edn-core-prd-whatsapp-meta-internal-verify-auth-token` | `VIL_WHATSAPP_META_INTERNAL_VERIFY_AUTH_TOKEN` | Both services. Secondary token check on the internal API surface (defense-in-depth alongside IAM service-to-service auth). Injected via `--set-secrets` in cloudbuild. |
 
 Replace `prd` with `dev` for the development equivalents.
 

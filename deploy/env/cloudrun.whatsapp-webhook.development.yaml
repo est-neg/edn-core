@@ -1,7 +1,6 @@
 # Cloud Run env-vars for edn-meta-whatsapp-webhook-dev (public Meta webhook relay).
 # Secrets (VIL_WHATSAPP_META_VERIFY_TOKEN, VIL_WHATSAPP_META_APP_SECRET,
-# VIL_WHATSAPP_META_INTERNAL_VERIFY_AUTH_TOKEN) are injected via --set-secrets
-# in cloudbuild and must NOT appear here.
+# VIL_WHATSAPP_META_INTERNAL_VERIFY_AUTH_TOKEN) are injected via --set-secrets in cloudbuild and must NOT appear here.
 # VIL_WHATSAPP_META_INTERNAL_INTAKE_URL and VIL_WHATSAPP_META_INTERNAL_AUDIENCE
 # are derived from the deployed edn-meta-whatsapp-api-dev URL at deploy time,
 # merged into a generated env-vars file, and passed via --env-vars-file.

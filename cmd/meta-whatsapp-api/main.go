@@ -8,7 +8,7 @@
 //   - --no-allow-unauthenticated --ingress internal
 //   - Cloud Run IAM service-to-service auth is the primary access control
 //   - VIL_MONGODB_URI (loaded from Secret Manager)
-//   - VIL_WHATSAPP_META_INTERNAL_VERIFY_AUTH_TOKEN (optional defense-in-depth, from Secret Manager)
+//   - VIL_WHATSAPP_META_INTERNAL_VERIFY_AUTH_TOKEN (loaded from Secret Manager)
 package main
 
 import (

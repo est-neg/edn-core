@@ -7,6 +7,7 @@
 // Deploy requirements:
 //   - --no-invoker-iam-check (public, unauthenticated access from Meta)
 //   - VIL_WHATSAPP_META_VERIFY_TOKEN, VIL_WHATSAPP_META_APP_SECRET (loaded from Secret Manager)
+//   - VIL_WHATSAPP_META_INTERNAL_VERIFY_AUTH_TOKEN (loaded from Secret Manager)
 //   - VIL_WHATSAPP_META_INTERNAL_INTAKE_URL, VIL_WHATSAPP_META_INTERNAL_AUDIENCE (derived from intake service)
 package main
 
